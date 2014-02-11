@@ -1,0 +1,894 @@
+#!/bin/bash
+#
+# Date: 2013-02-02
+# Version: 2.5
+#
+# Credits: 
+#    Mike La Spina for the original concept and script http://blog.laspina.ca/
+#    kattunga
+#      http://linuxzfs.blogspot.com/2012/08/zfs-replication-script.html
+#      https://github.com/kattunga/zfs-scripts.git
+#    slefevre
+#  
+# Function:
+#    Provides snapshot and send process which replicates a ZFS dataset from a source to target server.
+#    Maintains a runing snapshot archive for X time
+#
+# Enhancements:
+#  2014.02.02
+#   By slefevre
+#   - added long command line options, arg checking, general clean up and polishing
+#   - added support for xz compression
+#   - added support for encrypted transfer over non-ssh replication
+#   - added --stats option
+#   - consolidated some coding to eliminate duplicate code
+#  2013.04.16
+#	By slefevre
+#	- added support for mbuffer protocol
+#  2013.04.09
+#	By slefevre
+#	-made snapshot cleanup functions restrictive to prefix (-f option) value.  No prefix == all snapshots
+#  2013.04.05
+#	By: slefevre
+#	-added syslog capability
+#  2013.04.03
+#	By: slefevre
+# 	-added -q option for crontab scheduling w/out emails
+#  2013.04.02
+#	By: slefevre
+#	-support for other *nix platforms (CentOS, OpenIndiana)
+#	-support for longer retention level on target server (added -T option)
+#	-support for config file (zfs-replicate.conf)
+#	-support for non-root user on target system (can use -h user@target instead of -h target but user must be setup for sudo)
+#	-fixed a few typos
+#	-added log option
+#	-better isolation of lock & err files better concurrenct replication of different source paths
+#
+#
+# configuration file(s) path
+CONFIG_PATH=/etc/$(basename $0 .sh) 
+
+#######################################################################################
+##################### Do not touch anything below this line ###########################
+#######################################################################################
+
+#######################################################################################
+# email configuration. Install package mailutils, ssmtp and configure /etc/ssmtp/ssmtp.conf
+#######################################################################################
+mail_from=
+mail_to=
+mail_subject=
+
+#local bins
+ZFS=zfs
+GZIP=gzip
+NC=nc
+SOCAT=socat
+LOGGER=logger
+MBUFFER=mbuffer
+XZ=xz
+DATE=date
+MAILX=mailx
+CAT=cat
+PV=pv
+SHUF=shuf
+OPENSSL=openssl
+
+#target host bins
+RMT_ZFS=zfs
+RMT_ZCAT=zcat
+RMT_NC=nc
+RMT_SOCAT=socat
+RMT_MBUFFER=mbuffer
+RMT_XZCAT=xzcat
+RMT_CAT=cat
+RMT_OPENSSL=openssl
+
+# settings
+SSH_CIPHER='-c blowfish'
+PROTOCOL_PORT='auto'
+NC_OPTS=""
+RMT_NC_OPTS="-l"
+OPENSSL_OPTS="enc -e -aes-128-cbc"
+RMT_OPENSSL_OPTS="enc -d -aes-128-cbc"
+SYSLOG=false
+MBUFFER_OPTS="-s 128k -m 256M -q"
+RMT_MBUFFER_OPTS="-s 128k -m 256M -q"
+PIPELINE_DELAY=5
+DATE_FORMAT="+%Y-%m-%d %H:%M:%S"
+
+# process files
+#  set LOG_FILE to null to disable.  (e.g. LOG_FILE= )
+LOG_FILE=/var/log/$(basename $0 .sh).log
+#LOG_FILE=
+TMP_PATH=/tmp/$(basename $0 .sh).$RANDOM
+RSYNC_LOG=$TMP_PATH/rsync.stats
+ERR_FILE=$TMP_PATH/error
+EMAIL_LOG=$TMP_PATH/emaillog
+DSNAP_LIST=$TMP_PATH/snaplist-target.lst
+SNAP_LIST=$TMP_PATH/snaplist.lst
+
+# parsed parameters (defaults)
+TGT_HOST=
+SSH_TGT_HOST=
+SSH_TGT_PORT=
+SRC_PATH=
+TGT_PATH=
+SNAP_PREF=
+MAX_TIME=
+RMT_MAX_TIME=
+VERBOSE=
+CLEAN=false
+COMPARE=false
+SNAPSHOT=true
+REPLICATE=true
+SENDMAIL=false
+ERR_MAIL=false
+CREATEFS=false
+QUIET=false
+PROTOCOL="SSH"
+COMP_LEVEL=6
+COMPRESSION=
+PORT_RANGE=60000-65000
+DEBUG=false
+STATS=false
+ZFS_CREATE_OPTS=
+ENCRYPT=false
+ENCRYPT_PASSWORD=
+
+declare -a on_exit_items
+####################################Function###########################################
+#
+# on exit
+#
+on_exit() {
+	sig="$1"; shift
+	[ $DEBUG == true ] && echo "on_exit: signal = $sig"
+	[ $sig != EXIT ] && log "Received signal $sig.  Shutting down!"
+    for i in "${on_exit_items[@]}"
+    do
+        [ $DEBUG == true ] && log "on_exit: $i"
+        eval $i
+    done
+    # propigate the sig
+    if [ $sig != EXIT ]; then
+    	trap - $sig EXIT
+    	kill -s $sig $$
+    fi
+}
+
+####################################Function###########################################
+#
+# on exit run
+#
+on_exit_run() {
+    local n=${#on_exit_items[*]}
+    on_exit_items[$n]="$*"
+    if [[ $n -eq 0 ]]; then
+        [ $DEBUG == true ] && log "Setting trap"
+        for sig in EXIT HUP INT QUIT PIPE TERM; do
+        	[ $DEBUG == true ] && log "trap \"on_exit $sig\" $sig"
+        	trap "on_exit $sig" $sig
+        done
+    fi
+}
+
+#######################################################################################
+####################################Function###########################################
+#######################################################################################
+#
+# show_help
+#
+show_help() {
+	echo "Usage: $(basename $0) "
+	echo "  -H --host         target [user@]host"
+	echo "  -p --port         target ssh port"
+	echo "  -s --source       source zfs dataset"
+	echo "  -d --dest         target zfs dataset (default = source)"
+	echo "  -f --prefix       snapshot prefix"
+	echo "  -t --snap-retain  max time to preserve/retain snapshots"
+	echo "                     e.g. \"7 days ago\", \"12 hours ago\" (default infinite)"
+	echo "  -T --dest-snap-retain max time to preserve snapshots on target"
+	echo "                     (see -t option for examples)"
+	echo "  -v --verbose      verbose"
+	echo "  -c --clean-snaps  clean snapshots in target that are not in source"
+	echo "  -k --compare      compare source and target with checksum using rsync"
+	echo "  -n --no-snap      do not snapshot"
+	echo "  -r --no-repl      do not replicate"
+	echo "  -z --create-dest  create target file system/dataset"
+	echo "  -O --dest-opt     options to apply to zfs command when creating dataset"
+	echo "                     same options as 'zfs create -o' (see man zfs) "
+	echo "                     e.g. compression=lz4, dedupe=on, recordsize=4k, etc"
+	echo "  -o --protocol     replication transport protocol"
+	echo "      SSH           ssh"
+	echo "      NETCAT        netcat client and server"
+	echo "      SOCAT         socat client and server"
+	echo "      NETSOCAT      netcat in server / socat in client"
+	echo "      MBUFFER       mbuffer client and server"
+	echo "  -C --compression  compression to use with protocol"
+	echo "      GZIP          gzip compression"
+	echo "      XZ            xz compression"
+	echo "  -P --repl-port    replication port for non-ssh protocols (default: auto)"
+	echo "  -l --comp-level   compression level 1..9 (default 6)"
+	echo "  -q --quiet        quiet. suppress output to stdout. usefull for cron jobs"
+	echo "  -m --email-errors email on errors"
+	echo "  -M --email        always email log"
+	echo "  -D --debug        show diagnositc information"
+	echo "  -S --stats        display transfer stats for non-ssh protocols"
+	echo "  -e --encrypt      encrypt zfs stream over network for non-ssh protocols"
+	echo "  -w --pass         encryption password (default: auto generated)"
+	echo "  -h --help         display usage options "
+	exit 
+}
+
+#######################################################################################
+#
+# Function generate random password 
+#
+generate_password() {
+	ENCRYPT_PASSWORD=$($OPENSSL rand -base64 48)
+	ENCRYPT_PASSWORD=${ENCRYPT_PASSWORD//$'\n'/}
+}
+
+
+#######################################################################################
+#
+# Function check if error was logged
+#
+check_for_error() {
+
+	if [ -s "$ERR_FILE" ]; then
+		log $(cat "$ERR_FILE")
+		[ $ERR_MAIL = true ] && send_email_log force
+		exit 1
+	fi
+}
+
+#######################################################################################
+#
+# Function log error
+#
+log_error() {
+	echo $1 > $ERR_FILE
+	check_for_error
+}
+
+#######################################################################################
+#
+# Function log to std out and log file(s)
+#
+log() {
+	if [[ $1 == *$'\n'* ]]; then
+		local IFS=$'~'
+		for l in ${1//$'\n'/'~   '}; do
+			log $l
+		done
+		return
+	fi
+	# don't output blank lines
+	if [ -n "$1" ] && [ "$1" != "-> " ]; then
+		date_line=$($DATE "$DATE_FORMAT")
+		line="$date_line $1"
+		if [ $QUIET = false ]; then
+			echo $line
+		fi
+		if [ -n "$LOG_FILE" ]; then
+			echo $line >> "$LOG_FILE" 2> /dev/null
+		fi
+		if [[ ( $SENDMAIL = true || $ERR_MAIL = true ) && -n $EMAIL_LOG ]]; then
+			echo $line >> "$EMAIL_LOG"
+		fi
+		line="$1"
+		if [ $SYSLOG = true ]; then
+			#fix lines beginning w/ '->' as logger reads as cl option
+			if [ "->" == "${line:0:2}" ]; then
+				line=${line:2}
+			fi
+			$LOGGER -t $(basename $0) "$line"
+		fi
+	fi
+}
+
+#######################################################################################
+#
+# Function email log file
+#
+send_email_log() {
+	flag=
+	[ $# -eq 1 ] && flag=$1
+	if [[ ( $SENDMAIL = true || $flag = force ) && -n $EMAIL_LOG && -s $EMAIL_LOG ]]; then
+		$MAILX -r "$mail_from" -s "$mail_subject" $mail_to < $EMAIL_LOG
+		[ $DEBUG = true ] && echo "Sent email to $mail_to."
+		# send email only once
+		SENDMAIL=false
+		#ERR_MAIL=false
+	fi
+
+}
+
+#######################################################################################
+#
+# Function Issue a snapshot for the source zfs path
+#
+create_fs_snap() {
+
+	SnapName="$SNAP_PREF$($DATE +%Y%m%d%H%M%S)"
+	log "-> $SRC_PATH@$SnapName Snapshot creation."
+	output=$( $ZFS snapshot $SRC_PATH\@$SnapName 2> $ERR_FILE )
+	log "-> $output"
+	check_for_error
+}
+
+#######################################################################################
+#
+# Function check if the destination zfs path exists and assign the result to the
+# variable target_fs_name.
+#
+target_fs_exists() {
+
+	target_fs_name=$(ssh -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS list -o name -H $TGT_PATH 2> $ERR_FILE | tail -1 )
+	if [ -s "$ERR_FILE" ]; 	then
+		path_error=$(grep "$TGT_PATH" $ERR_FILE)
+		if [ "$path_error" == "" ]; 		then
+			check_for_error
+		else
+			rm $ERR_FILE
+			log "-> $TGT_PATH file system does not exist on target host $TGT_HOST."
+		fi
+	fi
+	
+}
+
+#######################################################################################
+#
+# Function issue zfs list commands and assign the variables the last snapshot names for
+# both the source and destination hosts.
+#
+check_last_source_snap() {
+
+	last_snap_source=$( $ZFS list -o name -t snapshot -H 2> $ERR_FILE | grep $SRC_PATH\@ | tail -1 )
+	check_for_error
+	if [ "$last_snap_source" == "" ]
+	then
+		log_error "There is no snapshots in source filesystem $SRC_PATH"
+	fi
+
+}
+
+#######################################################################################
+#
+# Function issue zfs list commands and assign the variables the last snapshot names for
+# both the source and destination hosts.
+#
+check_last_target_snap() {
+
+	last_snap_target=$( ssh -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS list -H -o name -r -t snapshot 2> $ERR_FILE | grep $TGT_PATH\@ | tail -1 )
+	check_for_error
+	if [ "$last_snap_target" == "" ]
+	then
+		log_error "There is no snapshots in target filesystem $TGT_PATH"
+	fi
+}
+
+#######################################################################################
+#
+# Function replicate filesystem
+#
+replicate_fs() {
+	[ $# -eq 0 ] && return 1
+	action=$1
+	
+	check_last_source_snap 
+
+	case $action in 
+		init)
+			#if [ $CREATEFS = true ]; then
+			# create and replicate source to target
+			log "-> $last_snap_source Initial replication."
+			[ $DEBUG = true ] && log "DEBUG: ssh -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS create $ZFS_CREATE_OPTS -p $TGT_PATH"
+			log "-> $( ssh -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS create $ZFS_CREATE_OPTS -p $TGT_PATH 2> $ERR_FILE )"
+			check_for_error
+		
+			[ $DEBUG = true ] && log "DEBUG: ssh -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS set mountpoint=none $TGT_PATH"
+			log "-> $( ssh -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS set mountpoint=none $TGT_PATH 2> $ERR_FILE )"
+			check_for_error
+		
+			ZFS_SEND="$ZFS send -R $last_snap_source"
+			ZFS_RECV="$RMT_ZFS recv $VERBOSE -F $TGT_PATH"
+			;;		
+		repl)
+			#else
+			check_last_target_snap 
+			# replicate source to target
+			stringpos=0
+			let stringpos=$(expr index "$last_snap_target" @)
+			last_snap_target=$SRC_PATH@${last_snap_target:$stringpos}
+
+			log "-> $last_snap_target $last_snap_source Incremental send."
+
+			ZFS_SEND="$ZFS send -I $last_snap_target $last_snap_source"
+			ZFS_RECV="$RMT_ZFS recv $VERBOSE -F $TGT_PATH"
+	
+			#fi
+	esac
+	build_pipelines
+	
+	case "$PROTOCOL" in
+		# using ssh (for remote networks)
+		ssh|SSH)
+			if [ $DEBUG = true ]; then
+				log "DEBUG: $ZFS_SEND | $COMPRESS_SRC_PIPE | ssh $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT \"$COMPRESS_DST_PIPE | $ZFS_RECV\""
+			fi
+			log "-> $( $ZFS_SEND | $COMPRESS_SRC_PIPE | ssh $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT "$COMPRESS_DST_PIPE | $ZFS_RECV" 2> $ERR_FILE )"
+			;;
+			
+		netcat|NETCAT|socat|SOCAT|netsocat|NETSOCAT|mbuffer|MBUFFER)
+			# using netcat (local network) requires "netcat-traditional", must uninstall "netcat-openbds"
+			# using netcat in server and socat in client, recomended, requires "netcat-traditional", must uninstall "netcat-openbds"
+
+			if [ $DEBUG = true ]; then
+				log "DEBUG: Source pipeline = $ZFS_SEND | $COMPRESS_SRC_PIPE | $STATS_SRC_PIPE | $ENCRYPT_SRC_PIPE | $PROTOCOL_SRC_PIPE"
+				log "DEBUG: Destination pipeline = ssh -f -n $SSH_TGT_HOST $SSH_CIPHER $SSH_TGT_PORT \"$PROTOCOL_DST_PIPE | $ENCRYPT_DST_PIPE | $COMPRESS_DST_PIPE | $ZFS_RECV\""
+			fi
+			# start 'zfs send' pipeline
+			(sleep $PIPELINE_DELAY; $ZFS_SEND | $COMPRESS_SRC_PIPE | $STATS_SRC_PIPE | $ENCRYPT_SRC_PIPE | $PROTOCOL_SRC_PIPE) &
+			[ $STATS = true ] && echo "     stats  xfer'd  time    bandwidth"
+
+			#start 'zfs receive' pipeline
+			log "-> $(ssh $SSH_TGT_HOST $SSH_CIPHER $SSH_TGT_PORT "$PROTOCOL_DST_PIPE | $ENCRYPT_DST_PIPE | $COMPRESS_DST_PIPE | $ZFS_RECV" 2> $ERR_FILE)"
+			;;
+	esac
+
+	check_for_error
+}
+
+#######################################################################################
+#
+# Function build compression, transport protocol, etc pipelines
+#
+build_pipelines() {
+	case $COMPRESSION in
+		gzip|GZIP)
+			COMPRESS_SRC_PIPE="$GZIP -$COMP_LEVEL -c -"
+			COMPRESS_DST_PIPE="$RMT_ZCAT -c "
+			;;
+		xz|XZ)
+			COMPRESS_SRC_PIPE="$XZ -$COMP_LEVEL -c -"
+			COMPRESS_DST_PIPE="$RMT_XZCAT -c "
+			;;
+		*)
+			COMPRESS_SRC_PIPE="$CAT -"
+			COMPRESS_DST_PIPE="$RMT_CAT -"
+			;;
+	esac
+
+	case $PROTOCOL in
+		netcat|NETCAT)
+			PROTOCOL_SRC_PIPE="$NC $NC_OPTS $TGT_HOST $PROTOCOL_PORT"
+			PROTOCOL_DST_PIPE="$RMT_NC $RMT_NC_OPTS -p $PROTOCOL_PORT"
+			;;
+		socat|SOCAT)
+			PROTOCOL_SRC_PIPE="$SOCAT - tcp4:$TGT_HOST:$PROTOCOL_PORT,retry=5"
+			PROTOCOL_DST_PIPE="$RMT_SOCAT tcp4-listen:$PROTOCOL_PORT - "
+			;;
+		netsocat|NETSOCAT)
+			PROTOCOL_SRC_PIPE="$SOCAT - tcp4:$TGT_HOST:$PROTOCOL_PORT,retry=5"
+			PROTOCOL_DST_PIPE="$RMT_NC $RMT_NC_OPTS -p $PROTOCOL_PORT"
+			;;
+		mbuffer|MBUFFER)
+			PROTOCOL_SRC_PIPE="$MBUFFER $MBUFFER_OPTS -O $TGT_HOST:$PROTOCOL_PORT"
+			PROTOCOL_DST_PIPE="$RMT_MBUFFER $RMT_MBUFFER_OPTS -I $PROTOCOL_PORT"
+			;;
+		*)
+			PROTOCOL_SRC_PIPE=""
+			PROTOCOL_DST_PIPE=""
+			;;
+	esac
+
+	if [ $STATS = true ]; then
+		if [ -z $COMPRESSION ]; then
+			STATS_SRC_PIPE="$PV -N zfs-stream"
+		else
+			STATS_SRC_PIPE="$PV -N compressed"
+		fi
+	else
+		STATS_SRC_PIPE="$CAT -"
+	fi
+	
+	if [ $ENCRYPT = true ]; then
+		ENCRYPT_SRC_PIPE="$OPENSSL $OPENSSL_OPTS -k $ENCRYPT_PASSWORD"
+		ENCRYPT_DST_PIPE="$RMT_OPENSSL $RMT_OPENSSL_OPTS -k $ENCRYPT_PASSWORD"
+	else
+		ENCRYPT_SRC_PIPE="$CAT -"
+		ENCRYPT_DST_PIPE="$RMT_CAT -"
+	fi
+}
+
+#######################################################################################
+#
+# Function to clean up snapshots that are in target host but not in source
+#
+clean_remote_snaps() {
+
+	ssnap_list=$($ZFS list -H -o name -t snapshot | grep  $SRC_PATH\@${SNAP_PREF})
+
+	ssh -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS list -H -o name -t snapshot | grep $TGT_PATH\@${SNAP_PREF} > $DSNAP_LIST
+
+	while read dsnaps
+	do
+		echo "Snaphshot = $dsnaps"
+		stringpos=0
+		let stringpos=$(expr index "$dsnaps" @)+${#SNAP_PREF}
+		SnapName=${dsnaps:$stringpos}
+
+		if [ $(echo $ssnap_list | grep -c $SRC_PATH\@${SNAP_PREF}${SnapName}) -eq 0 ]; then
+			log "-> Destroying snapshot $dsnaps on $TGT_HOST"
+			log "-> $(ssh -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $dsnaps)"
+		fi
+
+	done < $DSNAP_LIST
+	
+	if [ -f $DSNAP_LIST ]; then
+		rm $DSNAP_LIST
+	fi
+}
+
+#######################################################################################
+#
+# Function to clean up snapshots that are older than X days old. X being the 
+# value set by "MAX_TIME" on both the source and destination hosts.
+# the last snapshot should not be deleted, at least one snapshot must be keeped
+#
+clean_old_snaps() {
+
+	check_last_source_snap  
+
+	$ZFS list -o name -t snapshot | grep  $SRC_PATH\@$SNAP_PREF > $SNAP_LIST
+
+	RetainDateTime=$($DATE +%Y%m%d%H%M%S --date="$MAX_TIME")
+	while read snaps
+	do
+		if [ "$last_snap_source" != $snaps ]
+		then
+			stringpos=0
+			let stringpos=$(expr index "$snaps" @)+${#SNAP_PREF}
+			let SnapDateTime=${snaps:$stringpos}
+
+			if [ $RetainDateTime -gt $SnapDateTime ]
+			then
+				log "-> Destroying snapshot $snaps on localhost"
+				log "-> $($ZFS destroy $snaps)"
+			fi
+		fi
+	done < $SNAP_LIST
+	
+	if [ -f $SNAP_LIST ]; then
+		rm $SNAP_LIST
+	fi
+
+	# check target systems' snaps and cleanup as needed
+	ssh -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS list -H -o name -t snapshot | grep $TGT_PATH\@${SNAP_PREF} > $DSNAP_LIST
+
+	RetainDateTime=$($DATE +%Y%m%d%H%M%S --date="$RMT_MAX_TIME")
+	while read dsnaps
+	do
+		stringpos=0
+		let stringpos=$(expr index "$dsnaps" @)+${#SNAP_PREF}
+		SnapDateTime=${dsnaps:$stringpos}
+		
+		# skip snapshots w/ non-numeric prefixes
+		#  if no prefix then all snapshot will be returned
+		#  need to ensure $SnapDateTime is numeric for comparison to $RetainDateTime
+		if [ $REPLICATE == true ]; then
+			if [ $(echo ${SnapDateTime} | grep -c ^[0-9]) -eq 1 ] && [ ${#SnapDateTime} -eq 14 ]; then
+				if [ $RetainDateTime -gt $SnapDateTime ]; then
+					log "-> Destroying snapshot $TGT_PATH@$SNAP_PREF$SnapDateTime on $TGT_HOST"
+					log "-> $(ssh -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $TGT_PATH\@$SNAP_PREF$SnapDateTime)"
+				fi
+			fi
+		fi
+	done < $DSNAP_LIST
+	if [ -f $DSNAP_LIST ]; then
+		rm $DSNAP_LIST
+	fi
+}
+
+#######################################################################################
+#
+# Function to compare filesystems with checksum
+#
+compare_filesystems() {
+
+	check_last_source_snap
+	stringpos=0
+	let stringpos=$(expr index "$last_snap_source" @)
+	source_snap_path=$($ZFS get -H -o value mountpoint $SRC_PATH)/.zfs/snapshot/${last_snap_source:$stringpos}
+
+	check_last_target_snap  
+	stringpos=0
+	let stringpos=$(expr index "$last_snap_target" @)
+	target_snap_path=$(ssh -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS get -H -o value mountpoint $TGT_PATH)/.zfs/snapshot/${last_snap_target:$stringpos}
+
+
+	log "-> comparing $source_snap_path to $TGT_HOST:$target_snap_path"
+	if [ -f $RSYNC_LOG ]; then
+		rm $RSYNC_LOG
+	fi
+	output=$( rsync -e "ssh $SSH_TGT_PORT" --recursive --checksum --dry-run --compress --stats --quiet --log-file-format="" --log-file=$RSYNC_LOG $source_snap_path/ $SSH_TGT_HOST:$target_snap_path/ 2> $ERR_FILE )
+	log "-> $output"
+	check_for_error
+
+	file_stat="files transferred:"
+	file_difs=$(grep "$file_stat" $RSYNC_LOG)
+	let stringpos=$(awk -v a="$file_difs" -v b="$file_stat" 'BEGIN{print index(a,b)}')+${#file_stat}
+	file_difs=${file_difs:$stringpos}
+	if [ $file_difs != '0' ]
+	then
+		log_error "error comparing source and target filesystem"
+	fi
+}
+
+#######################################################################################
+#####################################Main Entery#######################################
+#######################################################################################
+
+## local configuration
+[ -f $CONFIG_PATH/$(basename $0).conf ] && . $CONFIG_PATH/$(basename $0).conf
+
+[ $# -eq 0 ] && show_help
+
+while [ $# -gt 0 ];do
+     case "$1" in
+         -H|--host)
+             shift
+             SSH_TGT_HOST=$1
+             let pos=$(expr index "$SSH_TGT_HOST" @)
+             TGT_HOST=${SSH_TGT_HOST:$pos}
+             [ -z $TGT_HOST ] && TGT_HOST=$SSH_TGT_HOST
+             ;;
+         -p|--port)
+             shift
+             SSH_TGT_PORT="-p$1"
+             if [[ $SSH_TGT_PORT != *[^0-9]* ]]; then
+             	echo "Incorrect value $1. -p|--port must be numeric"
+             	exit 1
+             fi
+             ;;
+         -s|--source)
+             shift
+             SRC_PATH=$1
+             ;;
+         -d|--dest)
+			 shift
+             TGT_PATH=$1
+             ;;
+         -f|--prefix)
+             shift
+             SNAP_PREF="$1"
+             ;;
+         -t|--snap-retain)
+             shift
+             MAX_TIME="$1"
+             ;;
+         -T|--dest-snap-retain)
+             shift
+             RMT_MAX_TIME="$1"
+             ;;
+         -o|--protocol)
+             shift
+           	 case $1 in
+         	 	ssh|SSH|netcat|NETCAT|socat|SOCAT|netsocat|NETSOCAT|mbuffer|MBUFFER)
+         	 		PROTOCOL=$1
+         	 		;;
+         	 	*)
+         	 		echo "Incorrect protocol value $PROTOCOL. Valid -o|--protocol values: SSH NETCAT SOCAT NETSOCAT MBUFFER"
+         	 		exit 1 
+         	 		;;
+ 	 		 esac
+             ;;
+         -P|--repl-port)
+             shift
+             if [[ $1 =~ ^[0-9]+$ || $1 == "auto" ]]; then
+             	PROTOCOL_PORT=$1
+         	else
+             	echo "Incorrect port value $1. -P|--repl-port must be numeric or 'auto'"
+             	exit 1
+             fi
+             
+             ;;
+         -l|--comp-level)
+             shift
+             if [[ $1 =~ ^[1-9]+$ && $1 -ge 1 && $1 -le 9 ]]; then
+             	COMP_LEVEL=$1
+             else
+             	echo "Incorrect compression level $1. -l|--comp-level must be numeric (1-9)"
+             	exit 1
+             fi
+             ;;
+         -C|--compression)
+         	 shift
+         	 case $1 in
+         	 	gzip|GZIP|xz|XZ)
+         	 		COMPRESSION=$1
+         	 		;;
+         	 	*)
+         	 		echo "Incorrect compression value $COMPRESSION. Valid -C|--compression values: GZIP XZ"
+         	 		exit 1 
+         	 		;;
+ 	 		 esac
+         	 ;;
+         -O|--dest-opt)
+         	shift
+         	if [[ $1 == *=* ]]; then
+         		ZFS_CREATE_OPTS="$ZFS_CREATE_OPTS -o $1"
+         	else
+         		echo "Incorrect zfs create property $1. Please see 'man zfs' for details and syntax."
+         		exit 1
+         	fi
+             ;;
+         -e|--encrypt)
+         	ENCRYPT=true
+         	;;
+         -w|--pass)
+         	shift
+         	ENCRYPT_PASSWORD="$1"
+         	;;
+         -v|--verbose)
+            VERBOSE=-v
+            ;;
+         -c|--clean-snaps)
+            CLEAN=true
+            ;;
+         -k|--compare)
+            COMPARE=true
+            ;;
+         -n|--no-snap)
+            SNAPSHOT=false
+            ;;
+         -r|--no-repl)
+            REPLICATE=false
+            ;;
+         -m|--email-errors)
+            ERR_MAIL=true
+            ;;
+         -M|--email)
+            SENDMAIL=true
+            ;;
+         -z|--create-dest)
+            CREATEFS=true
+            ;;
+         -q|--quiet)
+         	QUIET=true
+         	;;
+         -D|--debug)
+            DEBUG=true
+            ;;
+         -S|--stats)
+            STATS=true
+            ;;
+         -h|--help)
+         	show_help
+         	;;
+         *)
+         	echo "Invalid option $1."
+            show_help
+            ;;
+     esac
+     shift
+done
+
+## remote host configuration (optional)
+[ -f $CONFIG_PATH/$TGT_HOST.conf ] && . $CONFIG_PATH/$TGT_HOST.conf
+
+# lock & err file isolation based on source path
+src_path_hash=${SRC_PATH//\//#}
+
+# lock file to avoid concurrent replication
+LOCK_FILE=$LOCK_PATH/$(basename $0 .sh)-${src_path_hash}
+
+# create isolated tmp directory
+mkdir -p $TMP_PATH > /dev/null 2>&1
+[ $DEBUG = true ] && log "TMP_PATH = $TMP_PATH"
+
+#register exit/clean up tasks
+on_exit_run	log "End ------------------------------------------------------------"
+on_exit_run send_email_log
+[ $DEBUG = false ] && on_exit_run rm -rf $TMP_PATH
+
+# check and complete parameters
+if [ "$SRC_PATH" == "" ]; then
+	echo "Missing parameter source path -s|--source"
+	show_help
+fi
+if [[ ($REPLICATE == true) || ($COMPARE == true) ]]; then
+	if [ "$TGT_HOST" == "" ]; 	then
+		echo "Missing parameter target host -H|--host"
+		show_help
+	fi
+	if [ "$TGT_PATH" == "" ]; 	then
+		TGT_PATH=$SRC_PATH
+	fi
+	if [ -z $PROTOCOL ]; then
+		echo "Transport protocol must be specified. See -o|--protocol options."
+		show_help
+	fi
+	# pick a port to use
+	if [ $PROTOCOL_PORT = auto ]; then
+		PROTOCOL_PORT=$($SHUF -i $PORT_RANGE -n 1)
+	fi
+	#if we're going to encrypt we need a password
+	if [ $ENCRYPT = true ] && [ -z $ENCRYPT_PASSWORD ]; then
+		generate_password
+	fi
+	# -T option not specified use -t option value
+	if [ -z "$RMT_MAX_TIME" ]; then
+		RMT_MAX_TIME=$MAX_TIME
+	fi
+fi
+
+# Check if no current replication is running
+if [ -e "$LOCK_FILE" ]; then
+	log_error "-> ERROR: replication is currently running."
+	exit
+fi
+
+# set the lock flag
+touch $LOCK_FILE > /dev/null 2>&1
+if [ $? -gt 0 ]; then
+	log_error "-> ERROR: unable to create lock file: $LOCK_FILE"
+	exit 1
+fi
+
+#register exit/clean up tasks
+on_exit_run rm -f $LOCK_FILE
+
+
+#Create a new snapshot of the path spec.
+if [ $SNAPSHOT == true ]; then
+	create_fs_snap
+fi
+
+# Send the snapshots to the target and create the fs if required
+if [ $REPLICATE == true ]; then
+	# Test for the existence of zfs file system path on the target host.
+	target_fs_exists
+
+	if [ -z $target_fs_name ]; then
+		# Create a first time replication.
+		if [ $CREATEFS == true ]; then
+			replicate_fs init
+		else
+			log "-> Use option -z|--create-dest to create file system in target host"
+		fi
+	else
+		# Clean up any snapshots in target that is not source
+		if [ $CLEAN == true ]; then
+			clean_remote_snaps 2> $ERR_FILE
+			check_for_error
+		fi
+
+		# Initiate a dif replication.
+		replicate_fs repl 2> $ERR_FILE
+		check_for_error
+
+		# Clean up any snapshots that are old.
+		if [ "$MAX_TIME" != "" ]; then
+			clean_old_snaps 2> $ERR_FILE
+			check_for_error
+		fi
+	fi
+else
+	# Clean up any snapshots that are old.
+	if [ "$MAX_TIME" != "" ]; then
+		clean_old_snaps 2> $ERR_FILE
+		check_for_error
+	fi
+fi
+
+# compare filesystems with checksum
+if [ $COMPARE == true ]; then
+	compare_filesystems
+fi
+
+
+exit 0
