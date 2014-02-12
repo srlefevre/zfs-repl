@@ -36,6 +36,7 @@ Prerequisites
 8. Source system has GNU date command installed.  (This is needed to handle aging/deletion of snapshots)
 
 (Optionally) The following commands are installed on both source and target systems:
+
 |Feature/Capability | Source system | Target system |
 |-------------------|---------------|---------------|
 |Compression | gzip | zcat |
