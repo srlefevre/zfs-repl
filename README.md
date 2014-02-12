@@ -101,6 +101,7 @@ LOCK_PATH could be set to /var/lock, /var/lock/subsys, or even /tmp
 You can also specify global default settings in the /etc/zfs-repl/zfs-repl.conf. 
 
 
+
 **[target-name].conf**
 
 *Note:* For the uninitiated, [target-host] should be replaced by the hostname of your target system. For example, if you specify --host repl@nas12 on the 'zfs-repl' command line then nas12 would be your hostname and the configuration file would be /etc/zfs-repl/nas12.conf
@@ -145,4 +146,14 @@ Hourly snapshot replication crontab entry
 
 
 More examples to be added later.
+
+
+Notes
+=====
+
+mbuffer
+-------
+
+mbuffer is available on many *nix distrobutions as part of the base operating system.  On Red Hat EL6/CentOS 6 and other derived linux distrobutions, it is not included.  I was able to find mbuffer from Federa Core 13 works on CentOS 6 without issue.
+
 
