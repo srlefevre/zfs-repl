@@ -831,7 +831,7 @@ mkdir -p $TMP_PATH > /dev/null 2>&1
 on_exit_run replication_status
 on_exit_run	log "End ------------------------------------------------------------"
 on_exit_run send_email_log
-#[ $DEBUG = false ] && on_exit_run rm -rf $TMP_PATH
+[ $DEBUG = false ] && on_exit_run rm -rf $TMP_PATH
 
 # check and complete parameters
 if [ -z $SRC_PATH ]; then

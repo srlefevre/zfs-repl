@@ -9,9 +9,9 @@ This tool/script will create and replicate ZFS datasets/file systems using snaps
 The tool has been written to be flexible so that it can run on and against hopefully any *nix system that supports ZFS storage pools.
 
 This system has been tested on the following platforms:
-CentOS 6.5
-Ubuntu 12.04
-OpenIndiana 151.8a
+* CentOS 6.5
+* Ubuntu 12.04
+* OpenIndiana 151.8a
 
 Background/History
 ==================
@@ -36,18 +36,18 @@ Prerequisites
 8. Source system has GNU date command installed.  (This is needed to handle aging/deletion of snapshots)
 
 (Optionally) The following commands are installed on both source and target systems:
-Feature/Capability | Source system | Target system
--------------------|---------------|---------------
-Compression | gzip | zcat
- | xz | xzcat
-Transport Protcols | nc | nc
- | socat | socat
- | mbuffer | mbuffer
-Encryption | openssl | openssl
-Transfer Stats | pv | 
-Automatic Port Selection | shuf | 
-Log to syslog | logger | 
-Email logs/errors | mailx | 
+|Feature/Capability | Source system | Target system |
+|-------------------|---------------|---------------|
+|Compression | gzip | zcat |
+| | xz | xzcat |
+|Transport Protcols | nc | nc |
+| | socat | socat |
+| | mbuffer | mbuffer |
+|Encryption | openssl | openssl |
+|Transfer Stats | pv | |
+|Automatic Port Selection | shuf | |
+|Log to syslog | logger | |
+|Email logs/errors | mailx | |
 
 Use the package manager for your system to install the required and optional commands (e.g. yum, apt-get, pkg)
 
@@ -77,6 +77,7 @@ sudo nano /etc/zfs-repl/zfs-repl.conf
 ```
 
 **zfs-repl.conf**
+
 The /etc/zfs-repl/zfs-repl.conf file is a simple way to configure the script without having to edit the code directly.  The main thing that is needed is to specify the full path to each command.  The 'source-config' and 'target-config' scripts will handle most of this for you.  Please check to ensure DATE points to the GNU date command in the zfs-repl.conf file.
 
 Minimally, in /etc/zfs-repl/zfs-repl.conf you need to specify 
@@ -97,6 +98,7 @@ You may need to change the LOCK_PATH and LOG_FILE location to match the standard
 LOCK_PATH could be set to /var/lock, /var/lock/subsys, or even /tmp
 
 You can also specify global default settings in the /etc/zfs-repl/zfs-repl.conf. 
+
 
 **[target-name].conf**
 
