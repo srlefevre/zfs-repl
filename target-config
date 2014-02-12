@@ -1,0 +1,140 @@
+#! /bin/bash
+# creates a configuration for target system that can be piped to a file
+
+rmt_run(){
+	#params:
+	#  ssh_host
+	#  exec
+	#  rmt_var - where to store results
+	[ $# -ne 3 ] && exit 1
+	local ssh_host
+	local exec
+	local result_var
+	local out
+	local rc
+	ssh_host=$1
+	exec=$2
+	result_var=$3
+	
+	out=$( ssh $ssh_host "$exec" 2> /dev/null )
+	rc=$?
+	printf -v "${result_var}" '%s' "${out}"
+	return $rc
+}
+
+find_rmt_bins() {
+	# params:
+	#	ssh host
+	#	list of exec to find
+	#	results var
+	[ $# -ne 3 ] && exit 1
+	local ssh_host
+	local execs
+	local result_var
+	local cmd
+	local p
+	local paths
+	local x
+	local IFS
+	local e
+	declare -a execs=($2)
+	ssh_host=$1
+	declare -a execs=($2)
+	result_var=$3
+	
+	#build command to run
+	for e in ${execs[*]}; do
+		cmd="$cmd x=\$(which $e);test \$? -eq 0 && echo \$x || echo 'not found';"
+	done
+
+	# run it
+	rmt_run $ssh_host "$cmd" "$result_var"
+	
+	#check for missing paths
+	x=0
+	IFS=$'\n'
+	for p in ${!result_var}; do
+		if [[ "${p:0:1}" != "/" ]]; then
+			# try to find it
+			guess_rmt_bin $ssh_host ${execs[$x]}
+			p="${_guess_rmt_bin}"
+		fi
+		paths="${paths}${p}"$'\n'
+		x=$(( x + 1 ))
+	done
+	printf -v "${result_var}" '%s' "${paths}"
+	
+}
+
+guess_rmt_bin() {
+	# params
+	#	ssh host
+	#	exec
+	[ $# -ne 2 ] && exit 1
+	local ssh_host
+	local ex
+	local path_list
+	local k
+	local cmd
+	local IFS
+	ssh_host=$1
+	ex=$2
+	path_list="/sbin /bin /usr/sbin /usr/bin /usr/gnu/bin"
+	
+	#build command to run
+	IFS=' '
+	for k in $path_list; do
+		cmd="$cmd if [ -x $k/$ex ]; then echo $k/$ex; exit 0; fi;"
+	done
+	
+	# run it
+	rmt_run $ssh_host "$cmd" "_${FUNCNAME}"
+}
+
+usage() {
+	echo "Usage: $(basename $0 .sh) --host hostname"
+	exit 0
+}
+
+declare -a RMT_VARS=('RMT_SUDO=%s' 'RMT_ZFS="$RMT_SUDO %s"' 'RMT_ZCAT=%s' 'RMT_XZCAT=%s' 'RMT_NC=%s' 'RMT_ZCAT=%s' 'RMT_SOCAT=%s' 'RMT_MBUFFER=%s' 'RMT_CAT=%s' 'RMT_OPENSSL=%s' )
+EXECS="sudo zfs zcat xzcat nc socat mbuffer cat openssl"
+RMT_BINS=
+CONFIG_PATH=/etc/zfs-repl
+ 
+while [ $# -gt 0 ];do
+	case $1 in 
+		-H|--host)
+			shift
+			let pos=$(expr index "$1" @)
+			if [ $pos -gt 0 ]; then
+            	HOST=${1:$pos}
+            else
+				HOST=$1
+			fi
+			;;
+		*)
+			usage
+			;;
+	esac
+	shift
+done
+
+[ -z $HOST ] && usage
+
+HOST_CONF=$CONFIG_PATH/$HOST.conf
+
+CONFIG="# remote target for zfs-repl"$'\n'
+
+find_rmt_bins $HOST "$EXECS" "RMT_BINS"
+IFS=$'\n'
+i=0
+for v in $RMT_BINS; do
+	printf -v t "${RMT_VARS[$i]}" "$v"
+	CONFIG="${CONFIG}${t}"$'\n'
+	i=$(( i + 1 ))
+done
+
+echo "$CONFIG"
+
+
+

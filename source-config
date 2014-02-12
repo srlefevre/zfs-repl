@@ -1,0 +1,186 @@
+#! /bin/bash
+# creates a configuration for target system that can be piped to a file
+
+rmt_run(){
+	#params:
+	#  ssh_host
+	#  exec
+	#  rmt_var - where to store results
+	[ $# -ne 3 ] && exit 1
+	local ssh_host
+	local exec
+	local result_var
+	local out
+	local rc
+	ssh_host=$1
+	exec=$2
+	result_var=$3
+	
+	out=$( ssh $ssh_host "$exec" 2> /dev/null )
+	rc=$?
+	printf -v "${result_var}" '%s' "${out}"
+	return $rc
+}
+
+find_bins() {
+	# params:
+	#	list of exec to find
+	#	results var
+	[ $# -ne 2 ] && exit 1
+	local execs
+	local result_var
+	local p
+	local paths
+	local IFS
+	local e
+	declare -a execs=($1)
+	result_var=$2
+	
+	#find and check bins
+	for e in ${execs[*]}; do
+		p=$(which $e 2> /dev/null)
+		if [[ $? -ne 0 || $e = "date" ]]; then
+			# try to find it
+			guess_bin $e
+			p="${_guess_bin}"
+		fi
+		paths="${paths}${p}"$'\n'
+	done
+
+	printf -v "${result_var}" '%s' "${paths}"
+	
+}
+
+guess_bin() {
+	# params
+	#	exec
+	[ $# -ne 1 ] && exit 1
+	local ex
+	local path_list
+	local k
+	local cmd
+	local IFS
+	local out
+	ex=$1
+	path_list="/sbin /bin /usr/sbin /usr/bin /usr/gnu/bin"
+	
+	#build command to run
+	IFS=' '
+	for k in $path_list; do
+		if [ -x $k/$ex ]; then 
+			out=$k/$ex;
+			if [ $ex = date ]; then
+				test_date "$out"
+				if [ $? -eq 0 ]; then
+					break
+				else
+					out=
+				fi
+			fi
+		else
+			out="     "
+		fi;
+	done
+	
+	printf -v "_${FUNCNAME}" '%s' "${out}"
+}
+
+test_date() {
+	# params
+	# path to date commmand to test
+	local ex
+	ex=$1
+	$ex --date="-2 days" > /dev/null 2>&1
+}
+
+usage() {
+	echo "Usage: $(basename $0 .sh)"
+	exit 0
+}
+
+declare -a VARS=('SUDO=%s' 'ZFS="$SUDO %s"' 'ZCAT=%s' 'XZCAT=%s' 'NC=%s' 'SOCAT=%s' 'MBUFFER=%s' 'CAT=%s' 'OPENSSL=%s' 'LOGGER=%s' 'MAILX=%s' 'PV=%s' 'shuf=%s' 'DATE=%s')
+#EXECS="sudo zfs zcat xzcat nc socat mbuffer cat openssl logger mailx pv shuf date"
+EXECS="sudo zfs zcat xzcat nc socat mbuffer cat openssl logger mailx pv shuf date"
+BINS=
+CONFIG_PATH=/etc/zfs-repl
+ 
+
+#HOST_CONF=$CONFIG_PATH/$HOST.conf
+
+CONFIG="# local source for zfs-repl"$'\n'
+
+find_bins "$EXECS" "BINS"
+IFS=$'\n'
+i=0
+for v in $BINS; do
+	printf -v t "${VARS[$i]}" "$v"
+	CONFIG="${CONFIG}${t}"$'\n'
+	i=$(( i + 1 ))
+done
+
+echo "$CONFIG"
+
+tee  << EOF
+##### settings
+# uncomment the settings below to over ride the defaults in the zfs-repl script
+# settings in this file can be over ridden by command line options to zfs-repl script
+#
+# minimally set the email addresses
+mail_from=
+mail_to=
+mail_subject="zfs-replication log"
+
+#process files/paths
+LOCK_PATH=/var/lock
+LOG_FILE=/var/log/$(basename $0 .sh).log
+
+#log to syslog (true/false)
+#SYSLOG=true
+
+#date format used in log file
+# see 'man date' or 'info date' for options
+#DATE_FORMAT="+%Y-%m-%d %H:%M:%S"
+
+# default transport protocol (see 'zfs-repl --help' for valid options)
+#PROTOCOL=MBUFFER
+
+# ssh cipher to use
+#SSH_CIPHER="-c blowfish"
+
+#netcat local and remote options
+# see 'man nc' for options
+#NC_OPTS=
+#RMT_NC_OPTS="-l"
+
+#mbuffer local and remote options
+# see 'man mbuffer' for options
+#MBUFFER_OPTS="-s 128k -m 256M -q -v 1"
+#RMT_MBUFFER_OPTS="-s 128k -m 256M -q -v 1"
+
+# seconds to wait for non-ssh protocols to initiate send/receive connection before timing out
+#REPL_INIT_TIMEOUT=120
+
+# default compression tool and compression level (see 'zfs-repl --help' for valid options)
+#COMPRESSION=GZIP
+#COMP_LEVEL=6
+
+# for non-ssh protocols set the default port
+# 'auto' picks a number within the range specified in PORT_RANGE
+# this is helpful when your running multiple concurrent replications to the same host
+#PROTOCOL_PORT='auto'
+#PORT_RANGE=60000-65000
+
+# always email replication log (true/false)
+#SENDMAIL=false
+
+# email repliction log when an error occurs (true/false)
+#ERR_MAIL=true
+
+#encrypt replication over non-ssh protocols (true/false)
+#ENCRYPT=false
+
+#encryption password.  if left null/blank, a new password will be generated for each replication session
+#ENCRYPT_PASSWORD=
+EOF
+
+
