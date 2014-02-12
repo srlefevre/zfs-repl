@@ -37,10 +37,13 @@ find_rmt_bins() {
 	local x
 	local IFS
 	local e
-	declare -a execs=($2)
+	local uid
 	ssh_host=$1
 	declare -a execs=($2)
 	result_var=$3
+	
+	#get remote users id
+	rmt_run $ssh_host "id -u 2> /dev/null" "uid"
 	
 	#build command to run
 	for e in ${execs[*]}; do
@@ -58,6 +61,10 @@ find_rmt_bins() {
 			# try to find it
 			guess_rmt_bin $ssh_host ${execs[$x]}
 			p="${_guess_rmt_bin}"
+		fi
+		# root doesn't need sudo
+		if [[ ${execs[$x]} == sudo && $uid -eq 0 ]]; then
+			p='    '
 		fi
 		paths="${paths}${p}"$'\n'
 		x=$(( x + 1 ))
@@ -105,12 +112,7 @@ while [ $# -gt 0 ];do
 	case $1 in 
 		-H|--host)
 			shift
-			let pos=$(expr index "$1" @)
-			if [ $pos -gt 0 ]; then
-            	HOST=${1:$pos}
-            else
-				HOST=$1
-			fi
+			HOST=$1
 			;;
 		*)
 			usage
