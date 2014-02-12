@@ -78,7 +78,7 @@ sudo ./target-config --host [[user@]target-name] > /etc/zfs-repl/[target-name].c
 sudo nano /etc/zfs-repl/zfs-repl.conf  
 ```
 
-**zfs-repl.conf**
+###zfs-repl.conf
 
 The /etc/zfs-repl/zfs-repl.conf file is a simple way to configure the script without having to edit the code directly.  The main thing that is needed is to specify the full path to each command.  The 'source-config' and 'target-config' scripts will handle most of this for you.  Please check to ensure DATE points to the GNU date command in the zfs-repl.conf file.
 
@@ -109,7 +109,7 @@ You can also specify global default settings in the /etc/zfs-repl/zfs-repl.conf.
 
 
 
-**[target-name].conf**
+###[target-name].conf
 
 *Note:* For the uninitiated, [target-host] should be replaced by the hostname of your target system. For example, if you specify --host repl@nas12 on the 'zfs-repl' command line then nas12 would be your hostname and the configuration file would be /etc/zfs-repl/nas12.conf
 
