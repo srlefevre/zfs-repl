@@ -96,7 +96,7 @@ usage() {
 	exit 0
 }
 
-declare -a RMT_VARS=('RMT_SUDO=%s' 'RMT_ZFS="$RMT_SUDO %s"' 'RMT_ZCAT=%s' 'RMT_XZCAT=%s' 'RMT_NC=%s' 'RMT_ZCAT=%s' 'RMT_SOCAT=%s' 'RMT_MBUFFER=%s' 'RMT_CAT=%s' 'RMT_OPENSSL=%s' )
+declare -a RMT_VARS=('RMT_SUDO=%s' 'RMT_ZFS="$RMT_SUDO %s"' 'RMT_ZCAT=%s' 'RMT_XZCAT=%s' 'RMT_NC=%s' 'RMT_SOCAT=%s' 'RMT_MBUFFER=%s' 'RMT_CAT=%s' 'RMT_OPENSSL=%s' )
 EXECS="sudo zfs zcat xzcat nc socat mbuffer cat openssl"
 RMT_BINS=
 CONFIG_PATH=/etc/zfs-repl

@@ -130,7 +130,7 @@ See 'zfs-repl --help'.
 *Example 1:*
 Source system hostX needs to backup the every changing file system pool0/data01 to the target system hostZ under tank1/backup/data01.  hostX wants to maintain a rolling two days of snapshots but hostZ needs to maintain seven days of snapshots.  Snapshots need to be taken and replicated every hour using netcat transport protocol with gzip compression.  Further, hostZ needs to compress the backup file system using lz4.
 
-On hostZ, tank1/backup should already be created but tank1/backup/data01 should not.
+On hostZ, at least zpool tank1 should already be created but tank1/backup/data01 should not.
 
 Initial replication from hostX as root
 ```
