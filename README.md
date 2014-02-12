@@ -11,6 +11,7 @@ The tool has been written to be flexible so that it can run on and against hopef
 This system has been tested on the following platforms:
 * CentOS 6.5
 * Ubuntu 12.04
+* OpenIndiana 151.a8
 
 
 Background/History
@@ -97,6 +98,12 @@ LOG_FILE=/var/log/zfs-repl.log
 ```
 You may need to change the LOCK_PATH and LOG_FILE location to match the standard locations for your *nix installation.
 LOCK_PATH could be set to /var/lock, /var/lock/subsys, or even /tmp
+
+Create the log file with:
+```
+sudo touch /var/log/zfs-repl.log
+```
+
 
 You can also specify global default settings in the /etc/zfs-repl/zfs-repl.conf. 
 

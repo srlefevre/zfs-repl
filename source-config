@@ -132,7 +132,7 @@ mail_subject="zfs-replication log"
 
 #process files/paths
 LOCK_PATH=/var/lock
-LOG_FILE=/var/log/$(basename $0 .sh).log
+LOG_FILE=/var/log/zfs-repl.log
 
 #log to syslog (true/false)
 #SYSLOG=true
