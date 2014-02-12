@@ -44,10 +44,10 @@ Prerequisites
 | | socat | socat |
 | | mbuffer | mbuffer |
 |Encryption | openssl | openssl |
-|Transfer Stats | pv | |
-|Automatic Port Selection | shuf | |
-|Log to syslog | logger | |
-|Email logs/errors | mailx | |
+|Transfer Stats | pv | - |
+|Automatic Port Selection | shuf | - |
+|Log to syslog | logger | - |
+|Email logs/errors | mailx | - |
 
 Use the package manager for your system to install the required and optional commands (e.g. yum, apt-get, pkg)
 
