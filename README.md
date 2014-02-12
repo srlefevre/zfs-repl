@@ -159,6 +159,6 @@ Notes
 mbuffer
 -------
 
-mbuffer is available on many *nix distrobutions as part of the base operating system.  On Red Hat EL6/CentOS 6 and other derived linux distrobutions, it is not included.  I was able to find mbuffer from Federa Core 13 works on CentOS 6 without issue.
+mbuffer is available on many *nix distrobutions as part of the base operating system.  On Red Hat EL6/CentOS 6 and other derived linux distrobutions, it is not included.  I was able to find mbuffer from Fedora Core 13 works on CentOS 6 without issue.
 
 
