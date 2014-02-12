@@ -56,7 +56,7 @@ Use the package manager for your system to install the required and optional com
 
 Setup
 =====
-For those that pace in front of microwaves...
+For those that pace in front of microwave ovens...
 
 Install
 -------
