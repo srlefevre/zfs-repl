@@ -60,7 +60,11 @@ find_rmt_bins() {
 		if [[ "${p:0:1}" != "/" ]]; then
 			# try to find it
 			guess_rmt_bin $ssh_host ${execs[$x]}
-			p="${_guess_rmt_bin}"
+			if [ -z ${_guess_rmt_bin} ]; then
+				p="    "
+			else
+				p="${_guess_rmt_bin}"
+			fi
 		fi
 		# root doesn't need sudo
 		if [[ ${execs[$x]} == sudo && $uid -eq 0 ]]; then
