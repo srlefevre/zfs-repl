@@ -40,7 +40,7 @@ Prerequisites
 
 |Feature/Capability | Source system | Target system |
 |-------------------|---------------|---------------|
-|Compression | gzip | zcat |
+|Compression | gzip | gzip |
 | | xz | xzcat |
 |Transport Protcols | nc | nc |
 | | socat | socat |
@@ -122,8 +122,10 @@ ENCRYPT=true
 If you need to replicate to more then one host, make sure you run the 'target-config' command for each host and create the appropriate .conf file for each host.  For example:
 
 ```
-sudo ./target-config --host repl@host1 > /etc/zfs-repl/host1.conf
-sudo ./target-config --host root@host2 > /etc/zfs-repl/host2.conf
+sudo su
+./target-config --host repl@host1 > /etc/zfs-repl/host1.conf
+./target-config --host root@host2 > /etc/zfs-repl/host2.conf
+exit
 ```
 
 
