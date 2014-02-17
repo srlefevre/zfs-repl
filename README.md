@@ -163,9 +163,4 @@ mbuffer
 
 mbuffer is available on many *nix distrobutions as part of the base operating system.  On Red Hat EL6/CentOS 6 and other derived linux distrobutions, it is not included.  I was able to find mbuffer from Fedora Core 13 works on CentOS 6 without issue.
 
-zfs on linux
-------------
 
-There appears to be a bug in 'zfs on linux' when using the --dest-opt command line switch.  Specifically, if you specify the compression property, 'zfs on linux' will override that value with the parent zfs dataset value.  For example, if you have tank0/tmp on your target system with the 'compression' property set to the default of 'off' then any replicated dataset/file system under tank0/tmp will have the compression property set to 'off' no matter what you specify in the -dest-opt compression=xxx option.
-
-To work around this, you can set the the parent dataset/file system to the compression value you want using the 'zfs set' command which will then be inherited.
