@@ -1,27 +1,6 @@
 #! /bin/bash
 # creates a configuration for target system that can be piped to a file
 
-rmt_run(){
-	#params:
-	#  ssh_host
-	#  exec
-	#  rmt_var - where to store results
-	[ $# -ne 3 ] && exit 1
-	local ssh_host
-	local exec
-	local result_var
-	local out
-	local rc
-	ssh_host=$1
-	exec=$2
-	result_var=$3
-	
-	out=$( ssh $ssh_host "$exec" 2> /dev/null )
-	rc=$?
-	printf -v "${result_var}" '%s' "${out}"
-	return $rc
-}
-
 find_bins() {
 	# params:
 	#	list of exec to find
@@ -33,8 +12,10 @@ find_bins() {
 	local paths
 	local IFS
 	local e
+	local uid
 	declare -a execs=($1)
 	result_var=$2
+	uid=$(id -u )
 	
 	#find and check bins
 	for e in ${execs[*]}; do
@@ -43,6 +24,11 @@ find_bins() {
 			# try to find it
 			guess_bin $e
 			p="${_guess_bin}"
+		fi
+		
+		# root doesn't need sudo
+		if [[ $e == sudo && $uid -eq 0 ]]; then
+			p='    '
 		fi
 		paths="${paths}${p}"$'\n'
 	done
@@ -98,9 +84,9 @@ usage() {
 	exit 0
 }
 
-declare -a VARS=('SUDO=%s' 'ZFS="$SUDO %s"' 'ZCAT=%s' 'XZCAT=%s' 'NC=%s' 'SOCAT=%s' 'MBUFFER=%s' 'CAT=%s' 'OPENSSL=%s' 'LOGGER=%s' 'MAILX=%s' 'PV=%s' 'SHUF=%s' 'DATE=%s')
+declare -a VARS=('SUDO=%s' 'ZFS="$SUDO %s"' 'GZIP=%s' 'XZ=%s' 'NC=%s' 'SOCAT=%s' 'MBUFFER=%s' 'CAT=%s' 'OPENSSL=%s' 'LOGGER=%s' 'MAILX=%s' 'PV=%s' 'SHUF=%s' 'DATE=%s')
 #EXECS="sudo zfs zcat xzcat nc socat mbuffer cat openssl logger mailx pv shuf date"
-EXECS="sudo zfs zcat xzcat nc socat mbuffer cat openssl logger mailx pv shuf date"
+EXECS="sudo zfs gzip xz nc socat mbuffer cat openssl logger mailx pv shuf date"
 BINS=
 CONFIG_PATH=/etc/zfs-repl
  

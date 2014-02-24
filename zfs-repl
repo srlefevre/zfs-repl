@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Date: 2013-02-23
-# Version: 2.5.7
+# Version: 2.5.8
 #
 # Credits: 
 #    Mike La Spina for the original concept and script http://blog.laspina.ca/
@@ -18,6 +18,7 @@
 #  2014.02.23
 #   By slefevre
 #    - added --force-recv option
+#    - fixed bug in launch check
 #  2014.02.17
 #   By slefevre
 #   - fixed bug in recursive snapshot replication
@@ -283,7 +284,7 @@ check_cmd() {
 	
 	case $sys in
 		source)
-			[ ! -x "${!var_name}" ] && log_error "-> ERROR: ${exec_name} not defined, not found, or not executable on source system.  Check ${var_name}= value in /etc/$(basename $0 .sh)/$(basename $0 .sh).conf. \'$opt_msg\' isn't available with current configuration!"
+			[ -x "${!var_name}" ] || log_error "-> ERROR: ${exec_name} not defined, not found, or not executable on source system.  Check ${var_name}= value in /etc/$(basename $0 .sh)/$(basename $0 .sh).conf. \'$opt_msg\' isn't available with current configuration!"
 			;;
 		target)
 			[ -z "${!var_name}" ] && log_error "-> ERROR: ${exec_name} is not defined for target system. Check ${var_name}= value in /etc/$(basename $0 .sh)/${TGT_HOST}.conf. '$opt_msg' isn't available with current configuration!"
@@ -964,9 +965,6 @@ if [ -n $LOG_FILE ] && [ ! -w $LOG_FILE ]; then
 	exit 1
 fi
 
-# check we have commands to run
-launch_check
-
 # lock & err file isolation based on source path
 src_path_hash=${SRC_PATH//\//#}
 
@@ -1019,6 +1017,9 @@ if [ -e "$LOCK_FILE" ]; then
 	log_error "-> ERROR: replication is currently running."
 	exit
 fi
+
+# check we have commands to run options specified
+launch_check
 
 # set the lock flag w/ pid
 touch $LOCK_FILE > /dev/null 2>&1
