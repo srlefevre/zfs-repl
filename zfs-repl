@@ -683,7 +683,7 @@ clean_remote_snaps() {
 
 	while read dsnaps
 	do
-		echo "Snaphshot = $dsnaps"
+		echo "Snapshot = $dsnaps"
 		stringpos=0
 		let stringpos=$(expr index "$dsnaps" @)+${#SNAP_PREF}
 		SnapName=${dsnaps:$stringpos}
