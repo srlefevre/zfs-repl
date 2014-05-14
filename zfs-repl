@@ -147,6 +147,7 @@ SNAP_PREF=
 MAX_TIME=
 RMT_MAX_TIME=
 VERBOSE=
+MOUNT=false
 CLEAN=false
 COMPARE=false
 SNAPSHOT=true
@@ -234,6 +235,7 @@ usage() {
 	echo "  -n --no-snap      do not snapshot"
 	echo "  -r --no-repl      do not replicate"
 	echo "  -z --create-dest  create target file system/dataset"
+	echo "  -a --mount-dest   leave mountpoint untouched in target"
 	echo "  -O --dest-opt     options to apply to zfs command when creating dataset"
 	echo "                     same options as 'zfs create -o' (see man zfs) "
 	echo "                     e.g. compression=lz4, dedupe=on, recordsize=4k, etc"
@@ -546,11 +548,13 @@ replicate_fs() {
 			[ $DEBUG = true ] && log "DEBUG: ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS create $ZFS_CREATE_OPTS -p $TGT_PATH"
 			log "-> $( ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS create $ZFS_CREATE_OPTS -p $TGT_PATH 2> $ERR_FILE )"
 			check_for_error
-						
-			[ $DEBUG = true ] && log "DEBUG: ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS set mountpoint=none $TGT_PATH"
-			log "-> $( ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS set mountpoint=none $TGT_PATH 2> $ERR_FILE )"
-			check_for_error
-		
+			
+			if [ $MOUNT = false]; then
+			    [ $DEBUG = true ] && log "DEBUG: ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS set mountpoint=none $TGT_PATH"
+			    log "-> $( ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS set mountpoint=none $TGT_PATH 2> $ERR_FILE )"
+			    check_for_error
+			fi
+
 			ZFS_SEND="$ZFS send $RECURSIVE_REPL $last_snap_source"
 			ZFS_RECV="$RMT_ZFS recv $VERBOSE -F $TGT_PATH"
 			;;		
@@ -682,7 +686,7 @@ clean_remote_snaps() {
 
 	while read dsnaps
 	do
-		echo "Snaphshot = $dsnaps"
+		echo "Snapshot = $dsnaps"
 		stringpos=0
 		let stringpos=$(expr index "$dsnaps" @)+${#SNAP_PREF}
 		SnapName=${dsnaps:$stringpos}
@@ -929,6 +933,9 @@ while [ $# -gt 0 ];do
          -z|--create-dest)
             CREATEFS=true
             ;;
+	 -a|--mount-dest)
+	    MOUNT=true
+	    ;;
          -q|--quiet)
          	QUIET=true
          	;;
