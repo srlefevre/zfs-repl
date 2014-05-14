@@ -15,6 +15,9 @@
 #    Maintains a runing snapshot archive for X time
 #
 # Enhancements/Fixes:
+#  2014.05.14
+#   By slefevre
+#    - bug fix to correctly destroy snapshots recursively when --recurse|-R option used
 #  2014.02.23
 #   By slefevre
 #    - added --force-recv option
@@ -686,7 +689,7 @@ clean_remote_snaps() {
 
 		if [ $(echo $ssnap_list | grep -c $SRC_PATH\@${SNAP_PREF}${SnapName}) -eq 0 ]; then
 			log "-> Destroying snapshot $dsnaps on $TGT_HOST"
-			log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $dsnaps)"
+			log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $RECURSIVE_SNAP $dsnaps)"
 		fi
 
 	done < $DSNAP_LIST
@@ -719,7 +722,7 @@ clean_old_snaps() {
 			if [ $RetainDateTime -gt $SnapDateTime ]
 			then
 				log "-> Destroying snapshot $snaps on localhost"
-				log "-> $($ZFS destroy $snaps)"
+				log "-> $($ZFS destroy $RECURSIVE_SNAP $snaps)"
 			fi
 		fi
 	done < $SNAP_LIST
