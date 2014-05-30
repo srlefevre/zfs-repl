@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Date: 2013-02-23
-# Version: 2.5.10
+# Version: 2.5.11
 #
 # Credits: 
 #    Mike La Spina for the original concept and script http://blog.laspina.ca/
@@ -15,6 +15,9 @@
 #    Maintains a runing snapshot archive for X time
 #
 # Enhancements/Fixes:
+#  2014.05.30
+#  by  slefevre
+#    - fix --no-repl logic in launch_check
 #  2014.05.28
 #  by slefevre
 #    - fix typo
@@ -24,7 +27,7 @@
 #  2014.02.23
 #   By slefevre
 #    - added --force-recv option
-#    - fixed bug in launch check
+#    - fixed bug in launch_check
 #  2014.02.17
 #   By slefevre
 #   - fixed bug in recursive snapshot replication
@@ -308,6 +311,19 @@ check_cmd() {
 launch_check() {
 	local option
 
+	if [[ $SENDMAIL == true || $ERR_MAIL == true ]]; then
+		check_cmd "source" "MAILX" "mailx" "-m|--email-errors|-M|--email"
+	fi
+	if [[ "$MAX_TIME" != "" || "$RMT_MAX_TIME" != "" ]]; then
+		check_cmd "source" "DATE" "GNU date" "-t|--snap-retain|-T|--dest-snap-retain"
+	fi
+
+	if [ $REPLICATE == false ] ; then
+		return
+	fi
+
+	# Communications related settings follow
+	#	
 	PROTOCOL=${PROTOCOL^^}
 	case $PROTOCOL in
 		NETCAT)
@@ -355,14 +371,7 @@ launch_check() {
 	if [ $STATS == true ]; then
 		check_cmd "source" "PV" "pv (pipeview)" "-S|--stats"
 	fi
-	
-	if [[ $SENDMAIL == true || $ERR_MAIL == true ]]; then
-		check_cmd "source" "MAILX" "mailx" "-m|--email-errors|-M|--email"
-	fi
-	if [[ "$MAX_TIME" != "" || "$RMT_MAX_TIME" != "" ]]; then
-		check_cmd "source" "DATE" "GNU date" "-t|--snap-retain|-T|--dest-snap-retain"
-	fi
-	
+		
 	if [ $PROTOCOL_PORT = 'auto' ]; then
 		check_cmd "source" "SHUF" "shuf" "-P|--repl-port auto"
 	fi
