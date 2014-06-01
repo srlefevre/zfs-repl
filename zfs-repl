@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Date: 2013-02-23
-# Version: 2.5.11
+# Version: 2.5.12
 #
 # Credits: 
 #    Mike La Spina for the original concept and script http://blog.laspina.ca/
@@ -15,6 +15,9 @@
 #    Maintains a runing snapshot archive for X time
 #
 # Enhancements/Fixes:
+#  2014.06/01
+#  by  slefevre
+#    - added --no-email option to supress email of log. Overrides config file.
 #  2014.05.30
 #  by  slefevre
 #    - fix --no-repl logic in launch_check
@@ -260,6 +263,7 @@ usage() {
 	echo "  -q --quiet        quiet. suppress output to stdout. usefull for cron jobs"
 	echo "  -m --email-errors email on errors"
 	echo "  -M --email        always email log"
+	echo "     --no-email     never email log"
 	echo "  -D --debug        show diagnositc information"
 	echo "  -S --stats        display transfer stats (for non-ssh protocols)"
 	echo "  -e --encrypt      encrypt zfs stream over network (for non-ssh protocols)"
@@ -942,12 +946,16 @@ while [ $# -gt 0 ];do
          -M|--email)
             SENDMAIL=true
             ;;
+         --no-email)
+            ERR_MAIL=false
+            SENDMAIL=false
+            ;;
          -z|--create-dest)
             CREATEFS=true
             ;;
-	 -a|--mount-dest)
-	    MOUNT=true
-	    ;;
+         -a|--mount-dest)
+            MOUNT=true
+            ;;
          -q|--quiet)
          	QUIET=true
          	;;
