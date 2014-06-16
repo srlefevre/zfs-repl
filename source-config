@@ -143,6 +143,14 @@ LOG_FILE=/var/log/zfs-repl.log
 #MBUFFER_OPTS="-s 128k -m 256M -q -v 1"
 #RMT_MBUFFER_OPTS="-s 128k -m 256M -q -v 1"
 
+#socat local and remote options
+# see 'man socat' for options
+#SOCAT_OPTS=
+#RMT_SOCAT_OPTS=
+#socat local and remote TCP transport options
+#SOCAT_TCP_OPTS="retry=5"
+#RMT_SOCAT_TCP_OPTS=
+
 # seconds to wait for non-ssh protocols to initiate send/receive connection before timing out
 #REPL_INIT_TIMEOUT=120
 
