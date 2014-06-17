@@ -167,6 +167,7 @@ RMT_MAX_TIME=
 VERBOSE=
 MOUNT=false
 CLEAN=false
+CLEANNOPREFIX=false
 COMPARE=false
 SNAPSHOT=true
 RECURSIVE_SNAP=
@@ -702,6 +703,35 @@ build_pipelines() {
 
 #######################################################################################
 #
+# Function to clean up snapshots that on target host which aren't part of
+#	SNAP_PREF naming convention.  This lets us recursively backup
+#	filesystems with their own snapshot namespace on the source,
+#	while keeping the target clean with just SNAP_PREF snapshots.
+#
+clean_remote_noprefix_snaps() {
+	# On target path, but without snap prefix
+	ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS list -H -o name -t snapshot | grep $TGT_PATH | grep -v ${TGT_PATH}.*\@${SNAP_PREF} > $DSNAP_LIST
+
+	while read dsnaps
+	do
+		stringpos=0
+		let stringpos=$(expr index "$dsnaps" @)+${#SNAP_PREF}
+		SnapName=${dsnaps:$stringpos}
+
+		# Do not do recursive destroy, since we have enumerated
+		# all snapshots with [un]desired property
+		log "-> Destroying snapshot $dsnaps on $TGT_HOST"
+		log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $dsnaps)"
+
+	done < $DSNAP_LIST
+	
+	if [ -f $DSNAP_LIST ]; then
+		rm $DSNAP_LIST
+	fi
+}
+
+#######################################################################################
+#
 # Function to clean up snapshots that are in target host but not in source
 #
 clean_remote_snaps() {
@@ -940,6 +970,9 @@ while [ $# -gt 0 ];do
          -c|--clean-snaps)
             CLEAN=true
             ;;
+         --clean-noprefix-snaps)
+            CLEANNOPREFIX=true
+            ;;
          -k|--compare)
             COMPARE=true
             ;;
@@ -1090,9 +1123,17 @@ if [ $REPLICATE == true ]; then
 			log "-> Use option -z|--create-dest to create file system in target host"
 		fi
 	else
-		# Clean up any snapshots in target that is not source
+		# Clean up any snapshots in target that is not in source
+		#	still must have SNAP_PREF_
 		if [ $CLEAN == true ]; then
 			clean_remote_snaps 2> $ERR_FILE
+			check_for_error
+		fi
+
+		# Clean up any snapshots in target which are on
+		#	TGT_PATH but do _not_ have SNAP_PREF
+		if [ $CLEANNOPREFIX == true ]; then
+			clean_remote_noprefix_snaps 2> $ERR_FILE
 			check_for_error
 		fi
 
