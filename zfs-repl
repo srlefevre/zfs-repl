@@ -15,6 +15,10 @@
 #    Maintains a runing snapshot archive for X time
 #
 # Enhancements/Fixes:
+#  2014.06/17
+#  by whorfin
+# 	- Added --clean-noprefix-nosrc-snaps to clean target snaps without
+#	    prefix AND which are not on source
 #  2014.06/16
 #  by whorfin
 #	- socat run in unidirectional mode, "STDIO" explicit
@@ -170,6 +174,7 @@ VERBOSE=
 MOUNT=false
 CLEAN=false
 CLEANNOPREFIX=false
+CLEANNOPREFIXNOSRC=false
 COMPARE=false
 SNAPSHOT=true
 RECURSIVE_SNAP=
@@ -252,6 +257,8 @@ usage() {
 	echo "  -F --force-recv   Force receive on target dataset. See 'man zfs -F'"
 	echo "  -v --verbose      verbose"
 	echo "  -c --clean-snaps  clean snapshots in target that are not in source"
+	echo "  --clean-noprefix-snaps  clean snapshots on target which lack the snapshot prefix above"
+	echo "  --clean-noprefix-nosrc-snaps  clean snapshots on target which lack the snapshot prefix AND which do not exist on source"
 	echo "  -k --compare      compare source and target with checksum using rsync"
 	echo "  -n --no-snap      do not snapshot"
 	echo "  -r --no-repl      do not replicate"
@@ -706,6 +713,43 @@ build_pipelines() {
 #######################################################################################
 #
 # Function to clean up snapshots that on target host which aren't part of
+#	SNAP_PREF naming convention AND which are not on the source.
+#  	This lets us recursively backup filesystems with their own snapshot 
+#	namespace on the source, and maintain that additional snapshot
+#	hierarchy on the target, while allowing retention policy on the
+#	source [ie weekly/monthly/hourly] to be enforced on target.
+#
+clean_remote_noprefix_nosrc_snaps() {
+echo "Hello"
+	# On source path [ALL], without snap prefix
+	ssnap_list=$($ZFS list -r -H -o name -t snapshot | grep  -v ${SRC_PATH}.*\@${SNAP_PREF})
+
+	# On target path, without snap prefix
+	ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS list -H -o name -t snapshot | grep $TGT_PATH | grep -v ${TGT_PATH}.*\@${SNAP_PREF} > $DSNAP_LIST
+
+	while read dsnap
+	do
+		# replace target path with source path
+		targlen=${#TGT_PATH}
+		SnapName=${SRC_PATH}${dsnap:$targlen}
+
+		# Do not do recursive destroy, since we have enumerated
+		# all snapshots with [un]desired property
+		if [ $(echo $ssnap_list | grep -c ${SnapName}) -eq 0 ]; then
+			log "-> Destroying snapshot $dsnap on $TGT_HOST"
+			log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $dsnap)"
+		fi
+
+	done < $DSNAP_LIST
+	
+	if [ -f $DSNAP_LIST ]; then
+		rm $DSNAP_LIST
+	fi
+}
+
+#######################################################################################
+#
+# Function to clean up snapshots that on target host which aren't part of
 #	SNAP_PREF naming convention.  This lets us recursively backup
 #	filesystems with their own snapshot namespace on the source,
 #	while keeping the target clean with just SNAP_PREF snapshots.
@@ -714,16 +758,12 @@ clean_remote_noprefix_snaps() {
 	# On target path, but without snap prefix
 	ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS list -H -o name -t snapshot | grep $TGT_PATH | grep -v ${TGT_PATH}.*\@${SNAP_PREF} > $DSNAP_LIST
 
-	while read dsnaps
+	while read dsnap
 	do
-		stringpos=0
-		let stringpos=$(expr index "$dsnaps" @)+${#SNAP_PREF}
-		SnapName=${dsnaps:$stringpos}
-
 		# Do not do recursive destroy, since we have enumerated
 		# all snapshots with [un]desired property
-		log "-> Destroying snapshot $dsnaps on $TGT_HOST"
-		log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $dsnaps)"
+		log "-> Destroying snapshot $dsnap on $TGT_HOST"
+		log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $dsnap)"
 
 	done < $DSNAP_LIST
 	
@@ -975,6 +1015,9 @@ while [ $# -gt 0 ];do
          --clean-noprefix-snaps)
             CLEANNOPREFIX=true
             ;;
+         --clean-noprefix-nosrc-snaps)
+            CLEANNOPREFIXNOSRC=true
+            ;;
          -k|--compare)
             COMPARE=true
             ;;
@@ -1136,6 +1179,14 @@ if [ $REPLICATE == true ]; then
 		#	TGT_PATH but do _not_ have SNAP_PREF
 		if [ $CLEANNOPREFIX == true ]; then
 			clean_remote_noprefix_snaps 2> $ERR_FILE
+			check_for_error
+		fi
+
+		# Clean up any snapshots in target which are on
+		#	TGT_PATH but both do _not_ have SNAP_PREF
+		#	                 and are not on source
+		if [ $CLEANNOPREFIXNOSRC == true ]; then
+			clean_remote_noprefix_nosrc_snaps 2> $ERR_FILE
 			check_for_error
 		fi
 
