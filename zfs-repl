@@ -20,6 +20,8 @@
 #	- socat run in unidirectional mode, "STDIO" explicit
 #	- Added socat command and TCP socket argument mechanisms
 #	- Add OmniOS/SmartOS "pkgin" paths to find socat
+# 	- Added --clean-noprefix-snaps to clean target snaps not part of
+#	    our backup strategy [without prefix] which are on target path
 #  2014.06/01
 #  by  slefevre
 #    - added --no-email option to supress email of log. Overrides config file.
