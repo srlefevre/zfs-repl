@@ -17,8 +17,11 @@
 # Enhancements/Fixes:
 #  2014.06/17
 #  by whorfin
+#	- Important Bugfix: lack of quotes on echo and "$" on grep -c meant
+#	  substrings could match in clean_remote_snaps
 # 	- Added --clean-noprefix-nosrc-snaps to clean target snaps without
 #	    prefix AND which are not on source
+#	- Preparing for optimized pipes; already optimize SSH
 #  2014.06/16
 #  by whorfin
 #	- socat run in unidirectional mode, "STDIO" explicit
@@ -613,10 +616,19 @@ replicate_fs() {
 	case "$PROTOCOL" in
 		# using ssh (for remote networks)
 		SSH)
-			if [ $DEBUG = true ]; then
+echo "COMPRESS_SRC_PIPE=$COMPRESS_SRC_PIPE"
+			if [ ! -z "$COMPRESS_SRC_PIPE" ] ; then
+			    if [ $DEBUG = true ]; then
 				log "DEBUG: $ZFS_SEND | $COMPRESS_SRC_PIPE | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT \"$COMPRESS_DST_PIPE | $ZFS_RECV\""
+			    fi
+			    log "-> $( $ZFS_SEND | $COMPRESS_SRC_PIPE | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT "$COMPRESS_DST_PIPE | $ZFS_RECV" 2> $ERR_FILE )"
+			else
+			    # no compression
+			    if [ $DEBUG = true ]; then
+				log "DEBUG: $ZFS_SEND | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT \"$ZFS_RECV\""
+			    fi
+			    log "-> $( $ZFS_SEND | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT "$ZFS_RECV" 2> $ERR_FILE )"
 			fi
-			log "-> $( $ZFS_SEND | $COMPRESS_SRC_PIPE | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT "$COMPRESS_DST_PIPE | $ZFS_RECV" 2> $ERR_FILE )"
 			;;
 			
 		NETCAT|SOCAT|NETSOCAT|MBUFFER)
@@ -653,6 +665,7 @@ replicate_fs() {
 # Function build compression, transport protocol, etc pipelines
 #
 build_pipelines() {
+
 	case $COMPRESSION in
 		GZIP)
 			COMPRESS_SRC_PIPE="$GZIP -$COMP_LEVEL -c -"
@@ -663,8 +676,8 @@ build_pipelines() {
 			COMPRESS_DST_PIPE="$RMT_XZCAT -c "
 			;;
 		*)
-			COMPRESS_SRC_PIPE="$CAT -"
-			COMPRESS_DST_PIPE="$RMT_CAT -"
+			unset COMPRESS_SRC_PIPE
+			unset COMPRESS_DST_PIPE
 			;;
 	esac
 
@@ -686,8 +699,8 @@ build_pipelines() {
 			PROTOCOL_DST_PIPE="$RMT_MBUFFER $IP_VERSION $RMT_MBUFFER_OPTS -I $PROTOCOL_PORT"
 			;;
 		*)
-			PROTOCOL_SRC_PIPE=""
-			PROTOCOL_DST_PIPE=""
+			unset PROTOCOL_SRC_PIPE
+			unset PROTOCOL_DST_PIPE
 			;;
 	esac
 
@@ -698,15 +711,41 @@ build_pipelines() {
 			STATS_SRC_PIPE="$PV -N compressed"
 		fi
 	else
-		STATS_SRC_PIPE="$CAT -"
+		unset STATS_SRC_PIPE
 	fi
 	
 	if [ $ENCRYPT = true ]; then
 		ENCRYPT_SRC_PIPE="$OPENSSL $OPENSSL_OPTS -k $ENCRYPT_PASSWORD"
 		ENCRYPT_DST_PIPE="$RMT_OPENSSL $RMT_OPENSSL_OPTS -k $ENCRYPT_PASSWORD"
 	else
-		ENCRYPT_SRC_PIPE="$CAT -"
-		ENCRYPT_DST_PIPE="$RMT_CAT -"
+		unset ENCRYPT_SRC_PIPE
+		unset ENCRYPT_DST_PIPE
+	fi
+
+	# construct the pipelines now
+	if [ $PROTOCOL != SSH ]; then
+	    declare -a SRC_PIPELINE
+	    SRC_PIPELINE[0] = "$ZFS_SEND"
+	    if [ ! -z "$COMPRESS_SRC_PIPE" ]; then
+		SRC_PIPELINE[${#SRC_PIPELINE[@]}] = "$COMPRESS_SRC_PIPE"
+	    fi
+	    if [ ! -z "$STATS_SRC_PIPE" ]; then
+		SRC_PIPELINE[${#SRC_PIPELINE[@]}] = "$STATS_SRC_PIPE"
+	    fi
+	    if [ ! -z "$ENCRYPT_SRC_PIPE" ]; then
+		SRC_PIPELINE[${#SRC_PIPELINE[@]}] = "$ENCRYPT_SRC_PIPE"
+	    fi
+	    SRC_PIPELINE[${#SRC_PIPELINE[@]}] = "$PROTOCOL_SRC_PIPE"
+
+	    declare -a DST_PIPELINE
+	    DST_PIPELINE[0] = "$PROTOCOL_DST_PIPE"
+	    if [ ! -z "$ENCRYPT_DST_PIPE" ]; then
+		DST_PIPELINE[${#DST_PIPELINE[@]}] = "$ENCRYPT_DST_PIPE"
+	    fi
+	    if [ ! -z "$COMPRESS_DST_PIPE" ]; then
+		DST_PIPELINE[${#DST_PIPELINE[@]}] = "$COMPRESS_DST_PIPE"
+	    fi
+	    DST_PIPELINE[${#SRC_PIPELINE[@]}] = "$ZFS_RECV"
 	fi
 }
 
@@ -735,7 +774,7 @@ echo "Hello"
 
 		# Do not do recursive destroy, since we have enumerated
 		# all snapshots with [un]desired property
-		if [ $(echo $ssnap_list | grep -c ${SnapName}) -eq 0 ]; then
+		if [ $(echo "$ssnap_list" | grep -c ${SnapName}$) -eq 0 ]; then
 			log "-> Destroying snapshot $dsnap on $TGT_HOST"
 			log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $dsnap)"
 		fi
@@ -788,7 +827,7 @@ clean_remote_snaps() {
 		let stringpos=$(expr index "$dsnaps" @)+${#SNAP_PREF}
 		SnapName=${dsnaps:$stringpos}
 
-		if [ $(echo $ssnap_list | grep -c $SRC_PATH\@${SNAP_PREF}${SnapName}) -eq 0 ]; then
+		if [ $(echo "$ssnap_list" | grep -c $SRC_PATH\@${SNAP_PREF}${SnapName}$) -eq 0 ]; then
 			log "-> Destroying snapshot $dsnaps on $TGT_HOST"
 			log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $RECURSIVE_SNAP $dsnaps)"
 		fi
