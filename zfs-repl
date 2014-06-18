@@ -611,6 +611,9 @@ replicate_fs() {
 	
 			#fi
 	esac
+
+    	declare -a SRC_PIPELINE
+    	declare -a DST_PIPELINE
 	build_pipelines
 	
 	case "$PROTOCOL" in
@@ -632,24 +635,37 @@ echo "COMPRESS_SRC_PIPE=$COMPRESS_SRC_PIPE"
 			;;
 			
 		NETCAT|SOCAT|NETSOCAT|MBUFFER)
-			# using netcat (local network) requires "netcat-traditional", must uninstall "netcat-openbds"
-			# using netcat in server and socat in client, recomended, requires "netcat-traditional", must uninstall "netcat-openbds"
+			# Build command to eval
+			SRC_PIPELINE_CMDS="${SRC_PIPELINE[0]}"
+			pl=${#SRC_PIPELINE[@]}
+			for (( i=1; i<${pl}; i++ ));
+			do
+			    SRC_PIPELINE_CMDS="${SRC_PIPELINE_CMDS} | ${SRC_PIPELINE[$i]}"
+			done
+
+			DST_PIPELINE_CMDS="${DST_PIPELINE[0]}"
+			pl=${#DST_PIPELINE[@]}
+			for (( i=1; i<${pl}; i++ ));
+			do
+			    DST_PIPELINE_CMDS="${DST_PIPELINE_CMDS} | ${DST_PIPELINE[$i]}"
+			done
+			# pipelines built
 
 			if [ $DEBUG = true ]; then
-				log "DEBUG: Source pipeline = $ZFS_SEND | $COMPRESS_SRC_PIPE | $STATS_SRC_PIPE | $ENCRYPT_SRC_PIPE | $PROTOCOL_SRC_PIPE"
-				log "DEBUG: Destination pipeline = ssh $IP_VERSION $SSH_TGT_HOST $SSH_CIPHER $SSH_TGT_PORT \"$PROTOCOL_DST_PIPE | $ENCRYPT_DST_PIPE | $COMPRESS_DST_PIPE | $ZFS_RECV\""
+				log "DEBUG: Source pipeline = $SRC_PIPELINE_CMDS"
+				log "DEBUG: Destination pipeline = ssh $IP_VERSION $SSH_TGT_HOST $SSH_CIPHER $SSH_TGT_PORT \"$DST_PIPELINE_CMDS\""
 			fi
 			# start 'zfs send' pipeline
 			#  The timing of when to start sender differs between systems and the current load on the receiver.  This trick keeps everyone in sync.
 			#  The pipeline waits until 'zfs receive' pipeline is ready with '---' in $ERR_FILE
 		
 			replication_status init
-			(c=0;t=0; while [ $c -eq 0 ]; do sleep 1; [ -s $ERR_FILE ] && c=$(grep -c ^---$ $ERR_FILE); t=$(( t + 1 )); if [ $t -gt $REPL_INIT_TIMEOUT ]; then kill 0; exit 1; fi; done; $ZFS_SEND | $COMPRESS_SRC_PIPE | $STATS_SRC_PIPE | $ENCRYPT_SRC_PIPE | $PROTOCOL_SRC_PIPE 2>> $ERR_FILE ) &
+			(c=0;t=0; while [ $c -eq 0 ]; do sleep 1; [ -s $ERR_FILE ] && c=$(grep -c ^---$ $ERR_FILE); t=$(( t + 1 )); if [ $t -gt $REPL_INIT_TIMEOUT ]; then kill 0; exit 1; fi; done; eval $SRC_PIPELINE_CMDS 2>> $ERR_FILE ) &
 			[ $STATS = true ] && echo "     stats  xfer'd  time    rate"
 
 			# start 'zfs receive' pipeline
 			#  pipeline echos '---' to stderr (i.e. $ERR_FILE) to indicate ready to start
-			log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_CIPHER $SSH_TGT_PORT "echo '---' 1>&2; $PROTOCOL_DST_PIPE | $ENCRYPT_DST_PIPE | $COMPRESS_DST_PIPE | $ZFS_RECV" 2>> $ERR_FILE)"
+			log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_CIPHER $SSH_TGT_PORT "echo '---' 1>&2; eval $DST_PIPELINE_CMDS" 2>> $ERR_FILE)"
 			replication_status finished
 			
 			# remove start indicator (i.e. "---") for $ERR_FILE
@@ -724,28 +740,26 @@ build_pipelines() {
 
 	# construct the pipelines now
 	if [ $PROTOCOL != SSH ]; then
-	    declare -a SRC_PIPELINE
-	    SRC_PIPELINE[0] = "$ZFS_SEND"
+	    SRC_PIPELINE[0]="$ZFS_SEND"
 	    if [ ! -z "$COMPRESS_SRC_PIPE" ]; then
-		SRC_PIPELINE[${#SRC_PIPELINE[@]}] = "$COMPRESS_SRC_PIPE"
+		SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$COMPRESS_SRC_PIPE"
 	    fi
 	    if [ ! -z "$STATS_SRC_PIPE" ]; then
-		SRC_PIPELINE[${#SRC_PIPELINE[@]}] = "$STATS_SRC_PIPE"
+		SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$STATS_SRC_PIPE"
 	    fi
 	    if [ ! -z "$ENCRYPT_SRC_PIPE" ]; then
-		SRC_PIPELINE[${#SRC_PIPELINE[@]}] = "$ENCRYPT_SRC_PIPE"
+		SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$ENCRYPT_SRC_PIPE"
 	    fi
-	    SRC_PIPELINE[${#SRC_PIPELINE[@]}] = "$PROTOCOL_SRC_PIPE"
+	    SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$PROTOCOL_SRC_PIPE"
 
-	    declare -a DST_PIPELINE
-	    DST_PIPELINE[0] = "$PROTOCOL_DST_PIPE"
+	    DST_PIPELINE[0]="$PROTOCOL_DST_PIPE"
 	    if [ ! -z "$ENCRYPT_DST_PIPE" ]; then
-		DST_PIPELINE[${#DST_PIPELINE[@]}] = "$ENCRYPT_DST_PIPE"
+		DST_PIPELINE[${#DST_PIPELINE[@]}]="$ENCRYPT_DST_PIPE"
 	    fi
 	    if [ ! -z "$COMPRESS_DST_PIPE" ]; then
-		DST_PIPELINE[${#DST_PIPELINE[@]}] = "$COMPRESS_DST_PIPE"
+		DST_PIPELINE[${#DST_PIPELINE[@]}]="$COMPRESS_DST_PIPE"
 	    fi
-	    DST_PIPELINE[${#SRC_PIPELINE[@]}] = "$ZFS_RECV"
+	    DST_PIPELINE[${#DST_PIPELINE[@]}]="$ZFS_RECV"
 	fi
 }
 
