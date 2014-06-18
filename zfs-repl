@@ -774,7 +774,7 @@ echo "Hello"
 
 		# Do not do recursive destroy, since we have enumerated
 		# all snapshots with [un]desired property
-		if [ $(echo "$ssnap_list" | grep -c ${SnapName}$) -eq 0 ]; then
+		if [ $(echo "$ssnap_list" | grep -c ^${SnapName}$) -eq 0 ]; then
 			log "-> Destroying snapshot $dsnap on $TGT_HOST"
 			log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $dsnap)"
 		fi
@@ -827,7 +827,7 @@ clean_remote_snaps() {
 		let stringpos=$(expr index "$dsnaps" @)+${#SNAP_PREF}
 		SnapName=${dsnaps:$stringpos}
 
-		if [ $(echo "$ssnap_list" | grep -c $SRC_PATH\@${SNAP_PREF}${SnapName}$) -eq 0 ]; then
+		if [ $(echo "$ssnap_list" | grep -c ^$SRC_PATH\@${SNAP_PREF}${SnapName}$) -eq 0 ]; then
 			log "-> Destroying snapshot $dsnaps on $TGT_HOST"
 			log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $RECURSIVE_SNAP $dsnaps)"
 		fi
