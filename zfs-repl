@@ -15,9 +15,17 @@
 #    Maintains a runing snapshot archive for X time
 #
 # Enhancements/Fixes:
+#  2014.06/18
+#  by whorfin
+#	- Pipeline for non-SSH case is optimized; no more "| cat - |"
+#	- Fixes to really do the things previously promised...
+#	- TODO [?]: note that if a recursive replication fails for a
+#	  sub-branch, manual intervention will be required.
+#	  Delete parent snapshots on target back to the most recent snap
+#	  present for all children, then run with "--no-snap"
 #  2014.06/17
 #  by whorfin
-#	- Important Bugfix: lack of quotes on echo and "$" on grep -c meant
+#	- Important Bugfix: lack of quotes on echo and "^$" on grep -c meant
 #	  substrings could match in clean_remote_snaps
 # 	- Added --clean-noprefix-nosrc-snaps to clean target snaps without
 #	    prefix AND which are not on source
