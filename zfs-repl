@@ -19,6 +19,7 @@
 #  by whorfin
 #	- Fire --clean-noprefix-snaps before and after repl for space
 #	  efficiency.
+#	- Cleanup SSH optimization branch
 #  2014.06/18
 #  by whorfin
 #	- Pipeline for non-SSH case is optimized; no more "| cat - |"
@@ -631,19 +632,18 @@ replicate_fs() {
 	case "$PROTOCOL" in
 		# using ssh (for remote networks)
 		SSH)
-echo "COMPRESS_SRC_PIPE=$COMPRESS_SRC_PIPE"
 			if [ ! -z "$COMPRESS_SRC_PIPE" ] ; then
-			    if [ $DEBUG = true ]; then
-				log "DEBUG: $ZFS_SEND | $COMPRESS_SRC_PIPE | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT \"$COMPRESS_DST_PIPE | $ZFS_RECV\""
-			    fi
-			    log "-> $( $ZFS_SEND | $COMPRESS_SRC_PIPE | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT "$COMPRESS_DST_PIPE | $ZFS_RECV" 2> $ERR_FILE )"
+			    SRC_PIPELINE_CMDS="$ZFS_SEND | $COMPRESS_SRC_PIPE"
+			    DST_PIPELINE_CMDS="$COMPRESS_DST_PIPE | $ZFS_RECV"
 			else
 			    # no compression
-			    if [ $DEBUG = true ]; then
-				log "DEBUG: $ZFS_SEND | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT \"$ZFS_RECV\""
-			    fi
-			    log "-> $( $ZFS_SEND | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT "$ZFS_RECV" 2> $ERR_FILE )"
+			    SRC_PIPELINE_CMDS="$ZFS_SEND"
+			    DST_PIPELINE_CMDS="$ZFS_RECV"
 			fi
+			if [ $DEBUG = true ]; then
+			    log "DEBUG: $SRC_PIPELINE_CMDS | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT \"$DST_PIPELINE_CMDS\""
+			fi
+			log "-> $( eval $SRC_PIPELINE_CMDS | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT "eval $DST_PIPELINE_CMDS" 2> $ERR_FILE )"
 			;;
 			
 		NETCAT|SOCAT|NETSOCAT|MBUFFER)
