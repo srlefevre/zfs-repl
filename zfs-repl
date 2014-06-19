@@ -777,7 +777,7 @@ build_pipelines() {
 
 #######################################################################################
 #
-# Function to clean up snapshots that on target host which aren't part of
+# Function to clean up snapshots on target host which aren't part of
 #	SNAP_PREF naming convention AND which are not on the source.
 #  	This lets us recursively backup filesystems with their own snapshot 
 #	namespace on the source, and maintain that additional snapshot
@@ -814,7 +814,7 @@ echo "Hello"
 
 #######################################################################################
 #
-# Function to clean up snapshots that on target host which aren't part of
+# Function to clean up snapshots on target host which aren't part of
 #	SNAP_PREF naming convention.  This lets us recursively backup
 #	filesystems with their own snapshot namespace on the source,
 #	while keeping the target clean with just SNAP_PREF snapshots.
@@ -1233,7 +1233,7 @@ if [ $REPLICATE == true ]; then
 			log "-> Use option -z|--create-dest to create file system in target host"
 		fi
 	else
-		# Clean up any snapshots in target that is not in source
+		# Clean up any snapshots in target that are not in source
 		#	still must have SNAP_PREF_
 		if [ $CLEAN == true ]; then
 			clean_remote_snaps 2> $ERR_FILE
