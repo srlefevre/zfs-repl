@@ -15,6 +15,10 @@
 #    Maintains a runing snapshot archive for X time
 #
 # Enhancements/Fixes:
+#  2014.06/19
+#  by whorfin
+#	- Fire --clean-noprefix-snaps before and after repl for space
+#	  efficiency.
 #  2014.06/18
 #  by whorfin
 #	- Pipeline for non-SSH case is optimized; no more "| cat - |"
@@ -1237,13 +1241,6 @@ if [ $REPLICATE == true ]; then
 		fi
 
 		# Clean up any snapshots in target which are on
-		#	TGT_PATH but do _not_ have SNAP_PREF
-		if [ $CLEANNOPREFIX == true ]; then
-			clean_remote_noprefix_snaps 2> $ERR_FILE
-			check_for_error
-		fi
-
-		# Clean up any snapshots in target which are on
 		#	TGT_PATH but both do _not_ have SNAP_PREF
 		#	                 and are not on source
 		if [ $CLEANNOPREFIXNOSRC == true ]; then
@@ -1251,9 +1248,27 @@ if [ $REPLICATE == true ]; then
 			check_for_error
 		fi
 
+		# Clean up any snapshots in target which are on
+		#	TGT_PATH but do _not_ have SNAP_PREF
+		# this runs twice; see below
+		if [ $CLEANNOPREFIX == true ]; then
+			clean_remote_noprefix_snaps 2> $ERR_FILE
+			check_for_error
+		fi
+
+
 		# Initiate a dif replication.
 		replicate_fs repl 2> $ERR_FILE
 		check_for_error
+
+		# This gets run twice; before replication to recover space
+		# After replication for new source snaps meeting criterion
+		# Clean up any snapshots in target which are on
+		#	TGT_PATH but do _not_ have SNAP_PREF
+		if [ $CLEANNOPREFIX == true ]; then
+			clean_remote_noprefix_snaps 2> $ERR_FILE
+			check_for_error
+		fi
 
 		# Clean up any snapshots that are old.
 		if [ "$MAX_TIME" != "" ]; then
