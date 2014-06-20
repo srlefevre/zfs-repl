@@ -674,7 +674,6 @@ replicate_fs() {
 # Function build compression, transport protocol, etc pipelines
 #
 build_pipelines() {
-
 	case $COMPRESSION in
 		GZIP)
 			COMPRESS_SRC_PIPE="$GZIP -$COMP_LEVEL -c -"
