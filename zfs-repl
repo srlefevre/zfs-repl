@@ -15,6 +15,11 @@
 #    Maintains a runing snapshot archive for X time
 #
 # Enhancements/Fixes:
+#  2014.06/20
+#  by whorfin
+#	- All pipeline optimization collapsed; SSH not separate pipe build
+#		This means stats now work for SSH, and one could be
+#		extra paranoid and further encrypt the stream sent over SSH
 #  2014.06/19
 #  by whorfin
 #	- Fire --clean-noprefix-snaps before and after repl for space
@@ -632,14 +637,6 @@ replicate_fs() {
 	case "$PROTOCOL" in
 		# using ssh (for remote networks)
 		SSH)
-			if [ ! -z "$COMPRESS_SRC_PIPE" ] ; then
-			    SRC_PIPELINE_CMDS="$ZFS_SEND | $COMPRESS_SRC_PIPE"
-			    DST_PIPELINE_CMDS="$COMPRESS_DST_PIPE | $ZFS_RECV"
-			else
-			    # no compression
-			    SRC_PIPELINE_CMDS="$ZFS_SEND"
-			    DST_PIPELINE_CMDS="$ZFS_RECV"
-			fi
 			if [ $DEBUG = true ]; then
 			    log "DEBUG: $SRC_PIPELINE_CMDS | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT \"$DST_PIPELINE_CMDS\""
 			fi
@@ -647,22 +644,6 @@ replicate_fs() {
 			;;
 			
 		NETCAT|SOCAT|NETSOCAT|MBUFFER)
-			# Build command to eval
-			SRC_PIPELINE_CMDS="${SRC_PIPELINE[0]}"
-			pl=${#SRC_PIPELINE[@]}
-			for (( i=1; i<${pl}; i++ ));
-			do
-			    SRC_PIPELINE_CMDS="${SRC_PIPELINE_CMDS} | ${SRC_PIPELINE[$i]}"
-			done
-
-			DST_PIPELINE_CMDS="${DST_PIPELINE[0]}"
-			pl=${#DST_PIPELINE[@]}
-			for (( i=1; i<${pl}; i++ ));
-			do
-			    DST_PIPELINE_CMDS="${DST_PIPELINE_CMDS} | ${DST_PIPELINE[$i]}"
-			done
-			# pipelines built
-
 			if [ $DEBUG = true ]; then
 				log "DEBUG: Source pipeline = $SRC_PIPELINE_CMDS"
 				log "DEBUG: Destination pipeline = ssh $IP_VERSION $SSH_TGT_HOST $SSH_CIPHER $SSH_TGT_PORT \"$DST_PIPELINE_CMDS\""
@@ -751,28 +732,46 @@ build_pipelines() {
 	fi
 
 	# construct the pipelines now
-	if [ $PROTOCOL != SSH ]; then
-	    SRC_PIPELINE[0]="$ZFS_SEND"
-	    if [ ! -z "$COMPRESS_SRC_PIPE" ]; then
-		SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$COMPRESS_SRC_PIPE"
-	    fi
-	    if [ ! -z "$STATS_SRC_PIPE" ]; then
-		SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$STATS_SRC_PIPE"
-	    fi
-	    if [ ! -z "$ENCRYPT_SRC_PIPE" ]; then
-		SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$ENCRYPT_SRC_PIPE"
-	    fi
-	    SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$PROTOCOL_SRC_PIPE"
-
-	    DST_PIPELINE[0]="$PROTOCOL_DST_PIPE"
-	    if [ ! -z "$ENCRYPT_DST_PIPE" ]; then
-		DST_PIPELINE[${#DST_PIPELINE[@]}]="$ENCRYPT_DST_PIPE"
-	    fi
-	    if [ ! -z "$COMPRESS_DST_PIPE" ]; then
-		DST_PIPELINE[${#DST_PIPELINE[@]}]="$COMPRESS_DST_PIPE"
-	    fi
-	    DST_PIPELINE[${#DST_PIPELINE[@]}]="$ZFS_RECV"
+	SRC_PIPELINE[0]="$ZFS_SEND"
+	if [ ! -z "$COMPRESS_SRC_PIPE" ]; then
+	    SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$COMPRESS_SRC_PIPE"
 	fi
+	if [ ! -z "$STATS_SRC_PIPE" ]; then
+	    SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$STATS_SRC_PIPE"
+	fi
+	if [ ! -z "$ENCRYPT_SRC_PIPE" ]; then
+	    SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$ENCRYPT_SRC_PIPE"
+	fi
+	if [ ! -z "$PROTOCOL_SRC_PIPE" ]; then
+		SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$PROTOCOL_SRC_PIPE"
+	fi
+
+	if [ ! -z "$PROTOCOL_DST_PIPE" ]; then
+	    DST_PIPELINE[${#DST_PIPELINE[@]}]="$PROTOCOL_DST_PIPE"
+	fi
+	if [ ! -z "$ENCRYPT_DST_PIPE" ]; then
+	    DST_PIPELINE[${#DST_PIPELINE[@]}]="$ENCRYPT_DST_PIPE"
+	fi
+	if [ ! -z "$COMPRESS_DST_PIPE" ]; then
+	    DST_PIPELINE[${#DST_PIPELINE[@]}]="$COMPRESS_DST_PIPE"
+	fi
+	DST_PIPELINE[${#DST_PIPELINE[@]}]="$ZFS_RECV"
+
+	# Build commands to eval
+	SRC_PIPELINE_CMDS="${SRC_PIPELINE[0]}"
+	pl=${#SRC_PIPELINE[@]}
+	for (( i=1; i<${pl}; i++ ));
+	do
+	    SRC_PIPELINE_CMDS="${SRC_PIPELINE_CMDS} | ${SRC_PIPELINE[$i]}"
+	done
+
+	DST_PIPELINE_CMDS="${DST_PIPELINE[0]}"
+	pl=${#DST_PIPELINE[@]}
+	for (( i=1; i<${pl}; i++ ));
+	do
+	    DST_PIPELINE_CMDS="${DST_PIPELINE_CMDS} | ${DST_PIPELINE[$i]}"
+	done
+	# pipelines built
 }
 
 #######################################################################################
