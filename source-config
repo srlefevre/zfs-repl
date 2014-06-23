@@ -84,7 +84,7 @@ usage() {
 	exit 0
 }
 
-declare -a VARS=('SUDO=%s' 'ZFS="$SUDO %s"' 'GZIP=%s' 'XZ=%s' 'NC=%s' 'SOCAT=%s' 'MBUFFER=%s' 'CAT=%s' 'OPENSSL=%s' 'LOGGER=%s' 'MAILX=%s' 'PV=%s' 'SHUF=%s' 'DATE=%s')
+declare -a VARS=('SUDO=%s' 'ZFS="$SUDO %s"' 'GZIP=%s' 'XZ=%s' 'NC=%s' 'SOCAT=%s' 'MBUFFER=%s' 'CAT=%s' 'OPENSSL=%s' 'LOGGER=%s' 'MAILX=%s' 'SHUF=%s' 'DATE=%s')
 #EXECS="sudo zfs zcat xzcat nc socat mbuffer cat openssl logger mailx pv shuf date"
 EXECS="sudo zfs gzip xz nc socat mbuffer cat openssl logger mailx pv shuf date"
 BINS=
