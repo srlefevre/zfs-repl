@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# Date: 2013-02-23
-# Version: 2.5.12
+# Date: 2014-06-28
+# Version: 2.6.1
 #
 # Credits: 
 #    Mike La Spina for the original concept and script http://blog.laspina.ca/
@@ -15,6 +15,44 @@
 #    Maintains a runing snapshot archive for X time
 #
 # Enhancements/Fixes:
+#  2014.06/23
+#  by whorfin
+#	- Pipeline construction sends ALL stderr of pipeline to ERR_LOG
+#	  This is good as we catch any problems including zfs send
+#	  or compress/decompress/en/decrypt/socket errors, but breaks PV stats
+#	  so stats option is removed
+#  2014.06/20
+#  by whorfin
+#	- All pipeline optimization collapsed; SSH not separate pipe build
+#		This means stats now work for SSH, and one could be
+#		extra paranoid and further encrypt the stream sent over SSH
+#  2014.06/19
+#  by whorfin
+#	- Fire --clean-noprefix-snaps before and after repl for space
+#	  efficiency.
+#	- Cleanup SSH optimization branch
+#  2014.06/18
+#  by whorfin
+#	- Pipeline for non-SSH case is optimized; no more "| cat - |"
+#	- Fixes to really do the things previously promised...
+#	- TODO [?]: note that if a recursive replication fails for a
+#	  sub-branch, manual intervention will be required.
+#	  Delete parent snapshots on target back to the most recent snap
+#	  present for all children, then run with "--no-snap"
+#  2014.06/17
+#  by whorfin
+#	- Important Bugfix: lack of quotes on echo and "^$" on grep -c meant
+#	  substrings could match in clean_remote_snaps
+# 	- Added --clean-noprefix-nosrc-snaps to clean target snaps without
+#	    prefix AND which are not on source
+#	- Preparing for optimized pipes; already optimize SSH
+#  2014.06/16
+#  by whorfin
+#	- socat run in unidirectional mode, "STDIO" explicit
+#	- Added socat command and TCP socket argument mechanisms
+#	- Add OmniOS/SmartOS "pkgin" paths to find socat
+# 	- Added --clean-noprefix-snaps to clean target snaps not part of
+#	    our backup strategy [without prefix] which are on target path
 #  2014.06/01
 #  by  slefevre
 #    - added --no-email option to supress email of log. Overrides config file.
@@ -108,7 +146,6 @@ XZ=
 DATE=
 MAILX=
 CAT=
-PV=
 SHUF=
 OPENSSL=
 
@@ -132,6 +169,10 @@ RMT_OPENSSL_OPTS="enc -d -aes-128-cbc"
 SYSLOG=false
 MBUFFER_OPTS="-s 128k -m 256M -q"
 RMT_MBUFFER_OPTS="-s 128k -m 256M -q"
+SOCAT_OPTS=
+SOCAT_TCP_OPTS="retry=5"
+RMT_SOCAT_OPTS=
+RMT_SOCAT_TCP_OPTS=
 DATE_FORMAT="+%Y-%m-%d %H:%M:%S"
 REPL_INIT_TIMEOUT=120
 
@@ -158,6 +199,8 @@ RMT_MAX_TIME=
 VERBOSE=
 MOUNT=false
 CLEAN=false
+CLEANNOPREFIX=false
+CLEANNOPREFIXNOSRC=false
 COMPARE=false
 SNAPSHOT=true
 RECURSIVE_SNAP=
@@ -172,7 +215,6 @@ COMP_LEVEL=6
 COMPRESSION=
 PORT_RANGE=60000-65000
 DEBUG=false
-STATS=false
 ZFS_CREATE_OPTS=
 ENCRYPT=false
 ENCRYPT_PASSWORD=
@@ -240,6 +282,8 @@ usage() {
 	echo "  -F --force-recv   Force receive on target dataset. See 'man zfs -F'"
 	echo "  -v --verbose      verbose"
 	echo "  -c --clean-snaps  clean snapshots in target that are not in source"
+	echo "  --clean-noprefix-snaps  clean snapshots on target which lack the snapshot prefix above"
+	echo "  --clean-noprefix-nosrc-snaps  clean snapshots on target which lack the snapshot prefix AND which do not exist on source"
 	echo "  -k --compare      compare source and target with checksum using rsync"
 	echo "  -n --no-snap      do not snapshot"
 	echo "  -r --no-repl      do not replicate"
@@ -265,7 +309,6 @@ usage() {
 	echo "  -M --email        always email log"
 	echo "     --no-email     never email log"
 	echo "  -D --debug        show diagnositc information"
-	echo "  -S --stats        display transfer stats (for non-ssh protocols)"
 	echo "  -e --encrypt      encrypt zfs stream over network (for non-ssh protocols)"
 	echo "  -w --pass         encryption password (default: auto generated)"
 	echo "  -4 --ip4          only use IP v4"
@@ -372,10 +415,6 @@ launch_check() {
 		check_cmd "target" "RMT_OPENSSL" "openssl" "$option"
 	fi
 
-	if [ $STATS == true ]; then
-		check_cmd "source" "PV" "pv (pipeview)" "-S|--stats"
-	fi
-		
 	if [ $PROTOCOL_PORT = 'auto' ]; then
 		check_cmd "source" "SHUF" "shuf" "-P|--repl-port auto"
 	fi
@@ -589,36 +628,35 @@ replicate_fs() {
 	
 			#fi
 	esac
+
+    	declare -a SRC_PIPELINE
+    	declare -a DST_PIPELINE
 	build_pipelines
 	
 	case "$PROTOCOL" in
 		# using ssh (for remote networks)
 		SSH)
 			if [ $DEBUG = true ]; then
-				log "DEBUG: $ZFS_SEND | $COMPRESS_SRC_PIPE | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT \"$COMPRESS_DST_PIPE | $ZFS_RECV\""
+			    log "DEBUG: $SRC_PIPELINE_CMDS | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT \"$DST_PIPELINE_CMDS\""
 			fi
-			log "-> $( $ZFS_SEND | $COMPRESS_SRC_PIPE | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT "$COMPRESS_DST_PIPE | $ZFS_RECV" 2> $ERR_FILE )"
+			log "-> $( eval $SRC_PIPELINE_CMDS | ssh $IP_VERSION $SSH_CIPHER $SSH_TGT_HOST $SSH_TGT_PORT "eval $DST_PIPELINE_CMDS" 2> $ERR_FILE )"
 			;;
 			
 		NETCAT|SOCAT|NETSOCAT|MBUFFER)
-			# using netcat (local network) requires "netcat-traditional", must uninstall "netcat-openbds"
-			# using netcat in server and socat in client, recomended, requires "netcat-traditional", must uninstall "netcat-openbds"
-
 			if [ $DEBUG = true ]; then
-				log "DEBUG: Source pipeline = $ZFS_SEND | $COMPRESS_SRC_PIPE | $STATS_SRC_PIPE | $ENCRYPT_SRC_PIPE | $PROTOCOL_SRC_PIPE"
-				log "DEBUG: Destination pipeline = ssh $IP_VERSION $SSH_TGT_HOST $SSH_CIPHER $SSH_TGT_PORT \"$PROTOCOL_DST_PIPE | $ENCRYPT_DST_PIPE | $COMPRESS_DST_PIPE | $ZFS_RECV\""
+				log "DEBUG: Source pipeline = $SRC_PIPELINE_CMDS"
+				log "DEBUG: Destination pipeline = ssh $IP_VERSION $SSH_TGT_HOST $SSH_CIPHER $SSH_TGT_PORT \"$DST_PIPELINE_CMDS\""
 			fi
 			# start 'zfs send' pipeline
 			#  The timing of when to start sender differs between systems and the current load on the receiver.  This trick keeps everyone in sync.
 			#  The pipeline waits until 'zfs receive' pipeline is ready with '---' in $ERR_FILE
 		
 			replication_status init
-			(c=0;t=0; while [ $c -eq 0 ]; do sleep 1; [ -s $ERR_FILE ] && c=$(grep -c ^---$ $ERR_FILE); t=$(( t + 1 )); if [ $t -gt $REPL_INIT_TIMEOUT ]; then kill 0; exit 1; fi; done; $ZFS_SEND | $COMPRESS_SRC_PIPE | $STATS_SRC_PIPE | $ENCRYPT_SRC_PIPE | $PROTOCOL_SRC_PIPE 2>> $ERR_FILE ) &
-			[ $STATS = true ] && echo "     stats  xfer'd  time    rate"
+			(c=0;t=0; while [ $c -eq 0 ]; do sleep 1; [ -s $ERR_FILE ] && c=$(grep -c ^---$ $ERR_FILE); t=$(( t + 1 )); if [ $t -gt $REPL_INIT_TIMEOUT ]; then kill 0; exit 1; fi; done; eval $SRC_PIPELINE_CMDS 2>> $ERR_FILE ) &
 
 			# start 'zfs receive' pipeline
 			#  pipeline echos '---' to stderr (i.e. $ERR_FILE) to indicate ready to start
-			log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_CIPHER $SSH_TGT_PORT "echo '---' 1>&2; $PROTOCOL_DST_PIPE | $ENCRYPT_DST_PIPE | $COMPRESS_DST_PIPE | $ZFS_RECV" 2>> $ERR_FILE)"
+			log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_CIPHER $SSH_TGT_PORT "echo '---' 1>&2; eval $DST_PIPELINE_CMDS" 2>> $ERR_FILE)"
 			replication_status finished
 			
 			# remove start indicator (i.e. "---") for $ERR_FILE
@@ -644,8 +682,8 @@ build_pipelines() {
 			COMPRESS_DST_PIPE="$RMT_XZCAT -c "
 			;;
 		*)
-			COMPRESS_SRC_PIPE="$CAT -"
-			COMPRESS_DST_PIPE="$RMT_CAT -"
+			unset COMPRESS_SRC_PIPE
+			unset COMPRESS_DST_PIPE
 			;;
 	esac
 
@@ -655,11 +693,11 @@ build_pipelines() {
 			PROTOCOL_DST_PIPE="$RMT_NC $IP_VERSION $RMT_NC_OPTS $PROTOCOL_PORT"
 			;;
 		SOCAT)
-			PROTOCOL_SRC_PIPE="$SOCAT - $IP_VERSION tcp:$TGT_HOST:$PROTOCOL_PORT,retry=5"
-			PROTOCOL_DST_PIPE="$RMT_SOCAT $IP_VERSION tcp-listen:$PROTOCOL_PORT - "
+			PROTOCOL_SRC_PIPE="$SOCAT -u $SOCAT_OPTS STDIO $IP_VERSION tcp:$TGT_HOST:$PROTOCOL_PORT,$SOCAT_TCP_OPTS"
+			PROTOCOL_DST_PIPE="$RMT_SOCAT -u $RMT_SOCAT_OPTS $IP_VERSION tcp-listen:$PROTOCOL_PORT,$RMT_SOCAT_TCP_OPTS STDIO"
 			;;
 		NETSOCAT)
-			PROTOCOL_SRC_PIPE="$SOCAT - $IP_VERSION tcp:$TGT_HOST:$PROTOCOL_PORT,retry=5"
+			PROTOCOL_SRC_PIPE="$SOCAT -u $SOCAT_OPTS STDIO $IP_VERSION tcp:$TGT_HOST:$PROTOCOL_PORT,$SOCAT_TCP_OPTS"
 			PROTOCOL_DST_PIPE="$RMT_NC $IP_VERSION $RMT_NC_OPTS $PROTOCOL_PORT"
 			;;
 		MBUFFER)
@@ -667,27 +705,117 @@ build_pipelines() {
 			PROTOCOL_DST_PIPE="$RMT_MBUFFER $IP_VERSION $RMT_MBUFFER_OPTS -I $PROTOCOL_PORT"
 			;;
 		*)
-			PROTOCOL_SRC_PIPE=""
-			PROTOCOL_DST_PIPE=""
+			unset PROTOCOL_SRC_PIPE
+			unset PROTOCOL_DST_PIPE
 			;;
 	esac
 
-	if [ $STATS = true ]; then
-		if [ -z $COMPRESSION ]; then
-			STATS_SRC_PIPE="$PV -N zfs-stream"
-		else
-			STATS_SRC_PIPE="$PV -N compressed"
-		fi
-	else
-		STATS_SRC_PIPE="$CAT -"
-	fi
-	
 	if [ $ENCRYPT = true ]; then
 		ENCRYPT_SRC_PIPE="$OPENSSL $OPENSSL_OPTS -k $ENCRYPT_PASSWORD"
 		ENCRYPT_DST_PIPE="$RMT_OPENSSL $RMT_OPENSSL_OPTS -k $ENCRYPT_PASSWORD"
 	else
-		ENCRYPT_SRC_PIPE="$CAT -"
-		ENCRYPT_DST_PIPE="$RMT_CAT -"
+		unset ENCRYPT_SRC_PIPE
+		unset ENCRYPT_DST_PIPE
+	fi
+
+	# construct the pipelines now
+	SRC_PIPELINE[0]="$ZFS_SEND"
+	if [ ! -z "$COMPRESS_SRC_PIPE" ]; then
+	    SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$COMPRESS_SRC_PIPE"
+	fi
+	if [ ! -z "$ENCRYPT_SRC_PIPE" ]; then
+	    SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$ENCRYPT_SRC_PIPE"
+	fi
+	if [ ! -z "$PROTOCOL_SRC_PIPE" ]; then
+		SRC_PIPELINE[${#SRC_PIPELINE[@]}]="$PROTOCOL_SRC_PIPE"
+	fi
+
+	if [ ! -z "$PROTOCOL_DST_PIPE" ]; then
+	    DST_PIPELINE[${#DST_PIPELINE[@]}]="$PROTOCOL_DST_PIPE"
+	fi
+	if [ ! -z "$ENCRYPT_DST_PIPE" ]; then
+	    DST_PIPELINE[${#DST_PIPELINE[@]}]="$ENCRYPT_DST_PIPE"
+	fi
+	if [ ! -z "$COMPRESS_DST_PIPE" ]; then
+	    DST_PIPELINE[${#DST_PIPELINE[@]}]="$COMPRESS_DST_PIPE"
+	fi
+	DST_PIPELINE[${#DST_PIPELINE[@]}]="$ZFS_RECV"
+
+	# Build commands to eval
+	SRC_PIPELINE_CMDS="${SRC_PIPELINE[0]}"
+	pl=${#SRC_PIPELINE[@]}
+	for (( i=1; i<${pl}; i++ ));
+	do
+	    SRC_PIPELINE_CMDS="${SRC_PIPELINE_CMDS} | ${SRC_PIPELINE[$i]}"
+	done
+
+	DST_PIPELINE_CMDS="${DST_PIPELINE[0]}"
+	pl=${#DST_PIPELINE[@]}
+	for (( i=1; i<${pl}; i++ ));
+	do
+	    DST_PIPELINE_CMDS="${DST_PIPELINE_CMDS} | ${DST_PIPELINE[$i]}"
+	done
+	# pipelines built
+}
+
+#######################################################################################
+#
+# Function to clean up snapshots on target host which aren't part of
+#	SNAP_PREF naming convention AND which are not on the source.
+#  	This lets us recursively backup filesystems with their own snapshot 
+#	namespace on the source, and maintain that additional snapshot
+#	hierarchy on the target, while allowing retention policy on the
+#	source [ie weekly/monthly/hourly] to be enforced on target.
+#
+clean_remote_noprefix_nosrc_snaps() {
+	# On source path [ALL], without snap prefix
+	ssnap_list=$($ZFS list -r -H -o name -t snapshot | grep  -v ${SRC_PATH}.*\@${SNAP_PREF})
+
+	# On target path, without snap prefix
+	ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS list -H -o name -t snapshot | grep $TGT_PATH | grep -v ${TGT_PATH}.*\@${SNAP_PREF} > $DSNAP_LIST
+
+	while read dsnap
+	do
+		# replace target path with source path
+		targlen=${#TGT_PATH}
+		SnapName=${SRC_PATH}${dsnap:$targlen}
+
+		# Do not do recursive destroy, since we have enumerated
+		# all snapshots with [un]desired property
+		if [ $(echo "$ssnap_list" | grep -c ^${SnapName}$) -eq 0 ]; then
+			log "-> Destroying snapshot $dsnap on $TGT_HOST"
+			log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $dsnap)"
+		fi
+
+	done < $DSNAP_LIST
+	
+	if [ -f $DSNAP_LIST ]; then
+		rm $DSNAP_LIST
+	fi
+}
+
+#######################################################################################
+#
+# Function to clean up snapshots on target host which aren't part of
+#	SNAP_PREF naming convention.  This lets us recursively backup
+#	filesystems with their own snapshot namespace on the source,
+#	while keeping the target clean with just SNAP_PREF snapshots.
+#
+clean_remote_noprefix_snaps() {
+	# On target path, but without snap prefix
+	ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS list -H -o name -t snapshot | grep $TGT_PATH | grep -v ${TGT_PATH}.*\@${SNAP_PREF} > $DSNAP_LIST
+
+	while read dsnap
+	do
+		# Do not do recursive destroy, since we have enumerated
+		# all snapshots with [un]desired property
+		log "-> Destroying snapshot $dsnap on $TGT_HOST"
+		log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $dsnap)"
+
+	done < $DSNAP_LIST
+	
+	if [ -f $DSNAP_LIST ]; then
+		rm $DSNAP_LIST
 	fi
 }
 
@@ -707,7 +835,7 @@ clean_remote_snaps() {
 		let stringpos=$(expr index "$dsnaps" @)+${#SNAP_PREF}
 		SnapName=${dsnaps:$stringpos}
 
-		if [ $(echo $ssnap_list | grep -c $SRC_PATH\@${SNAP_PREF}${SnapName}) -eq 0 ]; then
+		if [ $(echo "$ssnap_list" | grep -c ^$SRC_PATH\@${SNAP_PREF}${SnapName}$) -eq 0 ]; then
 			log "-> Destroying snapshot $dsnaps on $TGT_HOST"
 			log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $RECURSIVE_SNAP $dsnaps)"
 		fi
@@ -931,6 +1059,12 @@ while [ $# -gt 0 ];do
          -c|--clean-snaps)
             CLEAN=true
             ;;
+         --clean-noprefix-snaps)
+            CLEANNOPREFIX=true
+            ;;
+         --clean-noprefix-nosrc-snaps)
+            CLEANNOPREFIXNOSRC=true
+            ;;
          -k|--compare)
             COMPARE=true
             ;;
@@ -961,9 +1095,6 @@ while [ $# -gt 0 ];do
          	;;
          -D|--debug)
             DEBUG=true
-            ;;
-         -S|--stats)
-            STATS=true
             ;;
          -4|--ip4)
          	IP_VERSION='-4'
@@ -1081,15 +1212,42 @@ if [ $REPLICATE == true ]; then
 			log "-> Use option -z|--create-dest to create file system in target host"
 		fi
 	else
-		# Clean up any snapshots in target that is not source
+		# Clean up any snapshots in target that are not in source
+		#	still must have SNAP_PREF_
 		if [ $CLEAN == true ]; then
 			clean_remote_snaps 2> $ERR_FILE
 			check_for_error
 		fi
 
+		# Clean up any snapshots in target which are on
+		#	TGT_PATH but both do _not_ have SNAP_PREF
+		#	                 and are not on source
+		if [ $CLEANNOPREFIXNOSRC == true ]; then
+			clean_remote_noprefix_nosrc_snaps 2> $ERR_FILE
+			check_for_error
+		fi
+
+		# Clean up any snapshots in target which are on
+		#	TGT_PATH but do _not_ have SNAP_PREF
+		# this runs twice; see below
+		if [ $CLEANNOPREFIX == true ]; then
+			clean_remote_noprefix_snaps 2> $ERR_FILE
+			check_for_error
+		fi
+
+
 		# Initiate a dif replication.
 		replicate_fs repl 2> $ERR_FILE
 		check_for_error
+
+		# This gets run twice; before replication to recover space
+		# After replication for new source snaps meeting criterion
+		# Clean up any snapshots in target which are on
+		#	TGT_PATH but do _not_ have SNAP_PREF
+		if [ $CLEANNOPREFIX == true ]; then
+			clean_remote_noprefix_snaps 2> $ERR_FILE
+			check_for_error
+		fi
 
 		# Clean up any snapshots that are old.
 		if [ "$MAX_TIME" != "" ]; then

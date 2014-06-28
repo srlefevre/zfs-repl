@@ -90,7 +90,7 @@ guess_rmt_bin() {
 	local IFS
 	ssh_host=$1
 	ex=$2
-	path_list="/sbin /bin /usr/sbin /usr/bin /usr/gnu/bin"
+	path_list="/sbin /bin /usr/sbin /usr/bin /usr/gnu/bin /opt/local/bin /opt/local/sbin"
 	
 	#build command to run
 	IFS=' '
