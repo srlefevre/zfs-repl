@@ -12,6 +12,7 @@ This system has been tested on the following platforms:
 * CentOS 6.5
 * Ubuntu 12.04
 * OpenIndiana 151.a8
+* OmniOS r151008 and r151010 [current stable]
 
 
 Background/History
