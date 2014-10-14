@@ -317,7 +317,6 @@ usage() {
 	echo "  -M --email        always email log"
 	echo "     --no-email     never email log"
 	echo "  -D --debug        show diagnositc information"
-	echo "  -S --stats        display transfer stats (for non-ssh protocols)"
 	echo "  -e --encrypt      encrypt zfs stream over network (for non-ssh protocols)"
 	echo "  -w --pass         encryption password (default: auto generated)"
 	echo "  -4 --ip4          only use IP v4"
