@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# Date: 2014-10-23
-# Version: 2.6.4
+# Date: 2014-11-18
+# Version: 2.6.5
 #
 # Credits: 
 #    Mike La Spina for the original concept and script http://blog.laspina.ca/
@@ -16,6 +16,11 @@
 #    Maintains a runing snapshot archive for X time
 #
 # Enhancements/Fixes:
+# 2014.11.18
+# by slefevre
+#   - fixed logic in clean_old_snaps() for checking snapshot time-stamp in snapshot name
+#     fix prevents snapshots created outside zfs-repl from being inadvertantly deleted by clean_old_snaps()
+#   - fix issue in clean_old_snaps() w/ '-' (dash) or other potential problematic characters in snapshot name
 # 2014.20.23
 # by slefevre
 #   - fixed logic bug in clean_remote_snaps function so that the following use cases work properly
@@ -831,7 +836,7 @@ clean_remote_snaps() {
 
 	done < $DSNAP_LIST
 	
-	if [ -f $DSNAP_LIST ]; then
+		if [ -f $DSNAP_LIST ]; then
 		rm $DSNAP_LIST
 	fi
 }
@@ -845,21 +850,21 @@ clean_remote_snaps() {
 clean_old_snaps() {
 	check_last_source_snap  
 
-	$ZFS list -o name -t snapshot | grep  $SRC_PATH\@$SNAP_PREF > $SNAP_LIST
+	$ZFS list -H -o name -t snapshot -r $SRC_PATH | grep  $SRC_PATH\@$SNAP_PREF > $SNAP_LIST
 
 	RetainDateTime=$($DATE +%Y%m%d%H%M%S --date="$MAX_TIME")
 	while read snaps
 	do
-		if [ "$last_snap_source" != $snaps ]
-		then
-			stringpos=0
-			let stringpos=$(expr index "$snaps" @)+${#SNAP_PREF}
-			let SnapDateTime=${snaps:$stringpos}
+		if [ "$last_snap_source" != $snaps ]; then
+			SnapDateTime=${snaps:( ${#SRC_PATH} + ${#SNAP_PREF} + 1 )}
 
-			if [ $RetainDateTime -gt $SnapDateTime ]
-			then
-				log "-> Destroying snapshot $snaps on localhost"
-				log "-> $($ZFS destroy $RECURSIVE_SNAP $snaps)"
+			#  need to ensure $SnapDateTime is numeric and 14 digits for comparison to $RetainDateTime
+			if [ $( echo ${SnapDateTime} | grep -Ec ^[0-9]{14}$ ) -eq 1 ]; then
+				if [ $RetainDateTime -gt $SnapDateTime ]
+				then
+					log "-> Destroying snapshot $snaps on localhost"
+					log "-> $($ZFS destroy $RECURSIVE_SNAP $snaps)"
+				fi
 			fi
 		fi
 	done < $SNAP_LIST
@@ -870,29 +875,25 @@ clean_old_snaps() {
 
 	# check target systems' snaps and cleanup as needed
 	if [ $REPLICATE == true ]; then
-		ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS list -H -o name -t snapshot | grep ^$TGT_PATH\@${SNAP_PREF} > $DSNAP_LIST
+		ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS list -H -o name -t snapshot -r $TGT_PATH | grep ^$TGT_PATH\@${SNAP_PREF} > $DSNAP_LIST
 
 		RetainDateTime=$($DATE +%Y%m%d%H%M%S --date="$RMT_MAX_TIME")
 		while read dsnaps
 		do
-			stringpos=0
-			let stringpos=$(expr index "$dsnaps" @)+${#SNAP_PREF}
-			SnapDateTime=${dsnaps:$stringpos}
+			SnapDateTime=${dsnaps:( ${#TGT_PATH} + ${#SNAP_PREF} + 1 )}
 		
-			# skip snapshots w/ non-numeric prefixes
+			# skip snapshots w/ non-numeric suffixes
 			#  if no prefix then all snapshot will be returned
 			#  need to ensure $SnapDateTime is numeric for comparison to $RetainDateTime
-			if [ $REPLICATE == true ]; then
-				if [ $(echo ${SnapDateTime} | grep -c ^[0-9]) -eq 1 ] && [ ${#SnapDateTime} -eq 14 ]; then
-					if [ $RetainDateTime -gt $SnapDateTime ]; then
-						log "-> Destroying snapshot $TGT_PATH@$SNAP_PREF$SnapDateTime on $TGT_HOST"
-						log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $RECURSIVE_SNAP $TGT_PATH\@$SNAP_PREF$SnapDateTime)"
-					fi
+			if [ $( echo ${SnapDateTime} | grep -Ec ^[0-9]{14}$ ) -eq 1 ]; then
+				if [ $RetainDateTime -gt $SnapDateTime ]; then
+					log "-> Destroying snapshot $TGT_PATH@$SNAP_PREF$SnapDateTime on $TGT_HOST"
+					log "-> $(ssh $IP_VERSION -n $SSH_TGT_HOST $SSH_TGT_PORT $RMT_ZFS destroy $RECURSIVE_SNAP $TGT_PATH\@$SNAP_PREF$SnapDateTime)"
 				fi
 			fi
 		done < $DSNAP_LIST
 		if [ -f $DSNAP_LIST ]; then
-			rm $DSNAP_LIST
+			echo rm $DSNAP_LIST
 		fi
 	fi
 }
